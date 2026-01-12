@@ -96,8 +96,9 @@ def get_current_monitors():
     try:
         resp = requests.get(url, headers=HEADERS)
         data = resp.json()
-        if data.get('stat') == 'ok':
-            return {m['friendly_name']: m for m in data.get('monitors', [])}
+        # V3 Response has 'data' key, not 'stat'
+        if 'data' in data:
+            return {m['friendlyName']: m for m in data.get('data', [])}
         else:
             print(f"API Error (Get): {data}")
             return {}
