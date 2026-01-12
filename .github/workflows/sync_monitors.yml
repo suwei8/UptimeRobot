@@ -23,12 +23,7 @@ jobs:
 
       - name: Setup Cloudflared Binaries
         run: |
-          mkdir -p bin
-          # Download AMD64
-          curl -L --output bin/cloudflared-linux-amd64 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          # Download ARM64
-          curl -L --output bin/cloudflared-linux-arm64 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
-          
+          # Use local binaries from bin/ directory
           # Make them executable
           chmod +x bin/cloudflared-linux-amd64
           chmod +x bin/cloudflared-linux-arm64
