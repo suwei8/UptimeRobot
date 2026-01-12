@@ -33,33 +33,31 @@ def get_server_list():
         print(f"Failed to fetch config: {e}")
         return []
 
-def get_cloudflared_binary(cpu_type):
+def get_cloudflared_binary():
     """
-    Determines which cloudflared binary to use based on config's cpu_type.
+    Determines which cloudflared binary to use based on the LOCAL system architecture.
+    The ProxyCommand runs on the Runner (Client), not the Target Server.
     """
-    # Default to amd64 if not specified
-    arch = "amd64"
-    if cpu_type and "arm" in cpu_type.lower():
+    machine = platform.machine().lower()
+    
+    # Map platform.machine() to our binary suffix
+    if "aarch64" in machine or "arm64" in machine:
         arch = "arm64"
-    elif cpu_type and "amd" in cpu_type.lower():
+    else:
+        # Default to amd64 for x86_64, amd64, etc.
         arch = "amd64"
     
     # Path relative to the script/repo root
     binary_path = os.path.join("bin", f"cloudflared-linux-{arch}")
-    
-    # Safety Check: Warn if the binary architecture likely mismatches the runner
-    current_arch = platform.machine().lower()
-    if "x86_64" in current_arch and "arm" in arch:
-        print(f"[WARN] Architecture mismatch! Runner is {current_arch} but config requests {arch}. This may fail.")
-    
     return binary_path
 
-def get_public_ip(ssh_host, cpu_type):
+def get_public_ip(ssh_host, cpu_type_ignored):
     if not SSH_USER or not SSH_PASS:
         print("Skipping IP fetch: SSH credentials missing.")
         return None
 
-    cloudflared_bin = get_cloudflared_binary(cpu_type)
+    # We use local architecture for the proxy binary, unrelated to target cpu_type
+    cloudflared_bin = get_cloudflared_binary()
     
     # Using ProxyCommand with specific binary
     # Note: We must ensure the binary is executable (chmod +x handled in workflow)

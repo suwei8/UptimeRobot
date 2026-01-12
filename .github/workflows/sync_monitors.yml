@@ -26,7 +26,6 @@ jobs:
           # Use local binaries from bin/ directory
           # Make them executable
           chmod +x bin/cloudflared-linux-amd64
-          chmod +x bin/cloudflared-linux-arm64
           
           # List to verify
           ls -l bin/
