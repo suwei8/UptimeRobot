@@ -1,0 +1,48 @@
+name: Sync UptimeRobot Monitors
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 10:00 AM CST (UTC+2)
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Setup Cloudflared Binaries
+        run: |
+          mkdir -p bin
+          # Download AMD64
+          curl -L --output bin/cloudflared-linux-amd64 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          # Download ARM64
+          curl -L --output bin/cloudflared-linux-arm64 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          
+          # Make them executable
+          chmod +x bin/cloudflared-linux-amd64
+          chmod +x bin/cloudflared-linux-arm64
+          
+          # List to verify
+          ls -l bin/
+
+      - name: Install sshpass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Run Sync Script
+        env:
+          HOSTS_CONFIG_URL: ${{ secrets.HOSTS_CONFIG_URL }}
+          Main_API_key: ${{ secrets.UPTIMEROBOT_MAIN_API_KEY }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: python sync_monitors.py
