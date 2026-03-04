@@ -8,20 +8,27 @@ import sys
 
 # Configuration
 CONFIG_URL = os.getenv("HOSTS_CONFIG_URL")
-UPTIMEROBOT_API_KEY = os.getenv("Main_API_key")
+
+API_KEYS = {
+    "arm64": os.getenv("CF_555606_XYZ_MAIN_API_KEY"),
+    "amd64": os.getenv("XINJIAPO_555606_XYZ_MAIN_API_KEY")
+}
+
 SSH_USER = os.getenv("SSH_USERNAME")
 SSH_PASS = os.getenv("SSH_PASSWORD")
 
 # API V3 configuration
 API_BASE = "https://api.uptimerobot.com/v3"
-HEADERS = {
-    "Authorization": f"Bearer {UPTIMEROBOT_API_KEY}",
-    "Content-Type": "application/json"
-}
 
-if not UPTIMEROBOT_API_KEY:
-    print("Error: Main_API_key not set.")
+if not API_KEYS["arm64"] or not API_KEYS["amd64"]:
+    print("Error: One or both Main_API_keys not set.")
     exit(1)
+
+def get_headers(api_key):
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
 def get_server_list():
     try:
@@ -34,20 +41,11 @@ def get_server_list():
         return []
 
 def get_cloudflared_binary():
-    """
-    Determines which cloudflared binary to use based on the LOCAL system architecture.
-    The ProxyCommand runs on the Runner (Client), not the Target Server.
-    """
     machine = platform.machine().lower()
-    
-    # Map platform.machine() to our binary suffix
     if "aarch64" in machine or "arm64" in machine:
         arch = "arm64"
     else:
-        # Default to amd64 for x86_64, amd64, etc.
         arch = "amd64"
-    
-    # Path relative to the script/repo root
     binary_path = os.path.join("bin", f"cloudflared-linux-{arch}")
     return binary_path
 
@@ -56,13 +54,8 @@ def get_public_ip(ssh_host, cpu_type_ignored):
         print("Skipping IP fetch: SSH credentials missing.")
         return None
 
-    # We use local architecture for the proxy binary, unrelated to target cpu_type
     cloudflared_bin = get_cloudflared_binary()
-    
-    # Using ProxyCommand with specific binary
-    # Note: We must ensure the binary is executable (chmod +x handled in workflow)
     proxy_cmd = f"{cloudflared_bin} access ssh --hostname {ssh_host}"
-    
     cmd = [
         "sshpass", "-p", SSH_PASS,
         "ssh", 
@@ -91,12 +84,11 @@ def get_public_ip(ssh_host, cpu_type_ignored):
     
     return None
 
-def get_current_monitors():
+def get_current_monitors(api_key):
     url = f"{API_BASE}/monitors"
     try:
-        resp = requests.get(url, headers=HEADERS)
+        resp = requests.get(url, headers=get_headers(api_key))
         data = resp.json()
-        # V3 Response has 'data' key, not 'stat'
         if 'data' in data:
             return {m['friendlyName']: m for m in data.get('data', [])}
         else:
@@ -106,34 +98,31 @@ def get_current_monitors():
         print(f"Failed to fetch monitors: {e}")
         return {}
 
-def create_monitor(name, url):
+def create_monitor(api_key, name, url, interval):
     api_url = f"{API_BASE}/monitors"
-    # V3 Payload: friendlyName (camelCase), type (string enum)
     payload = {
         'friendlyName': name,
         'url': url,
         'type': 'PING', 
-        'interval': 300 
+        'interval': interval 
     }
-    
     try:
-        resp = requests.post(api_url, json=payload, headers=HEADERS)
+        resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
         data = resp.json()
         if data.get('stat') == 'ok':
-            print(f"[CREATED] {name} -> {url}")
+            print(f"[CREATED] {name} -> {url} (interval {interval}s)")
         else:
             print(f"[CREATE FAIL] {name}: {data.get('error')}")
     except Exception as e:
         print(f"[CREATE ERROR] {name}: {e}")
 
-def update_monitor(monitor_id, name, new_url):
+def update_monitor(api_key, monitor_id, name, new_url):
     api_url = f"{API_BASE}/monitors/{monitor_id}"
     payload = {
         'url': new_url
     }
-    
     try:
-        resp = requests.patch(api_url, json=payload, headers=HEADERS)
+        resp = requests.patch(api_url, json=payload, headers=get_headers(api_key))
         data = resp.json()
         if data.get('stat') == 'ok':
             print(f"[UPDATED] {name} -> {new_url}")
@@ -142,15 +131,50 @@ def update_monitor(monitor_id, name, new_url):
     except Exception as e:
         print(f"[UPDATE ERROR] {name}: {e}")
 
+def delete_monitor(api_key, monitor_id, name):
+    api_url = f"{API_BASE}/monitors/{monitor_id}"
+    try:
+        resp = requests.delete(api_url, headers=get_headers(api_key))
+        if resp.status_code in [200, 204]:
+            print(f"[DELETED] {name}")
+        else:
+            print(f"[DELETE FAIL] {name}: HTTP {resp.status_code} - {resp.text}")
+    except Exception as e:
+        print(f"[DELETE ERROR] {name}: {e}")
+
 def main():
     servers = get_server_list()
     if not servers:
         print("No servers found.")
         return
 
-    current_monitors = get_current_monitors()
-    print(f"Found {len(current_monitors)} existing monitors.")
+    config_names_arm64 = {s.get('name') for s in servers if s.get('name') and s.get('cpu_type', 'amd64') == 'arm64'}
+    config_names_amd64 = {s.get('name') for s in servers if s.get('name') and s.get('cpu_type', 'amd64') == 'amd64'}
 
+    # 1. Process arm64 monitors (cf_555606_xyz)
+    print("\n=== Processing ARM64 monitors ===")
+    arm64_api_key = API_KEYS["arm64"]
+    arm64_monitors = get_current_monitors(arm64_api_key)
+    print(f"Found {len(arm64_monitors)} existing arm64 monitors.")
+    
+    for name, monitor in arm64_monitors.items():
+        if name not in config_names_arm64:
+            print(f"Monitor {name} not in arm64 config. Deleting...")
+            delete_monitor(arm64_api_key, monitor['id'], name)
+
+    # 2. Process amd64 monitors (Xinjiapo_555606_xyz)
+    print("\n=== Processing AMD64 monitors ===")
+    amd64_api_key = API_KEYS["amd64"]
+    amd64_monitors = get_current_monitors(amd64_api_key)
+    print(f"Found {len(amd64_monitors)} existing amd64 monitors.")
+    
+    for name, monitor in amd64_monitors.items():
+        if name not in config_names_amd64:
+            print(f"Monitor {name} not in amd64 config. Deleting...")
+            delete_monitor(amd64_api_key, monitor['id'], name)
+
+    # 3. Synchronize actual servers
+    print("\n=== Synchronizing Server IPs ===")
     for server in servers:
         name = server.get('name')
         ssh_host = server.get('ssh_host')
@@ -159,7 +183,14 @@ def main():
         if not name or not ssh_host:
             continue
 
-        print(f"--- Processing {name} ({cpu_type}) ---")
+        api_key = API_KEYS.get(cpu_type)
+        if not api_key:
+            print(f"Skipping {name}: Unknown cpu_type {cpu_type}")
+            continue
+            
+        interval = 300 if cpu_type == "arm64" else 600
+
+        print(f"\n--- Checking {name} ({cpu_type}) ---")
         public_ip = get_public_ip(ssh_host, cpu_type)
         
         if not public_ip:
@@ -168,17 +199,19 @@ def main():
 
         print(f"Resolved IP: {public_ip}")
 
-        if name in current_monitors:
-            monitor = current_monitors[name]
+        current_monitors_for_type = arm64_monitors if cpu_type == "arm64" else amd64_monitors
+
+        if name in current_monitors_for_type:
+            monitor = current_monitors_for_type[name]
             old_ip = monitor.get('url')
             if old_ip != public_ip:
                 print(f"IP changed for {name} ({old_ip} -> {public_ip}). Updating...")
-                update_monitor(monitor['id'], name, public_ip)
+                update_monitor(api_key, monitor['id'], name, public_ip)
             else:
                 print(f"IP unchanged for {name}. No action.")
         else:
             print(f"Monitor {name} does not exist. Creating...")
-            create_monitor(name, public_ip)
+            create_monitor(api_key, name, public_ip, interval)
 
 if __name__ == "__main__":
     main()
