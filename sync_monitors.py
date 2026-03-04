@@ -96,8 +96,12 @@ def get_cloudflared_binary():
     binary_path = os.path.join("bin", f"cloudflared-linux-{arch}")
     return binary_path
 
-def get_public_ip(ssh_host, cpu_type):
-    ssh_user = SSH_USERS.get(cpu_type)
+def get_public_ip(ssh_host, cpu_type, server_name=None):
+    # Special case: US-GCP俄勒冈 uses ARM64 SSH username despite being amd64
+    if server_name == "US-GCP俄勒冈":
+        ssh_user = SSH_USERS.get("arm64")
+    else:
+        ssh_user = SSH_USERS.get(cpu_type)
     if not ssh_user or not SSH_PASS:
         print("Skipping IP fetch: SSH credentials missing.")
         return None
@@ -296,7 +300,7 @@ def main():
         interval = 300 if cpu_type == "arm64" else 600
 
         print(f"\n--- Checking {name} ({cpu_type}) ---")
-        public_ip = get_public_ip(ssh_host, cpu_type)
+        public_ip = get_public_ip(ssh_host, cpu_type, server_name=name)
         
         if not public_ip:
             print(f"Could not get public IP for {name}. Skipping update.")
