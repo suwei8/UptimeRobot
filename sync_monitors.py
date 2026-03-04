@@ -14,7 +14,10 @@ API_KEYS = {
     "amd64": os.getenv("XINJIAPO_555606_XYZ_MAIN_API_KEY")
 }
 
-SSH_USER = os.getenv("SSH_USERNAME")
+SSH_USERS = {
+    "arm64": os.getenv("SSH_USERNAME"),
+    "amd64": os.getenv("AMD64_SSH_USERNAME")
+}
 SSH_PASS = os.getenv("SSH_PASSWORD")
 
 # API V3 configuration
@@ -65,8 +68,9 @@ def get_cloudflared_binary():
     binary_path = os.path.join("bin", f"cloudflared-linux-{arch}")
     return binary_path
 
-def get_public_ip(ssh_host, cpu_type_ignored):
-    if not SSH_USER or not SSH_PASS:
+def get_public_ip(ssh_host, cpu_type):
+    ssh_user = SSH_USERS.get(cpu_type)
+    if not ssh_user or not SSH_PASS:
         print("Skipping IP fetch: SSH credentials missing.")
         return None
 
@@ -78,7 +82,7 @@ def get_public_ip(ssh_host, cpu_type_ignored):
         "-o", f"ProxyCommand={proxy_cmd}",
         "-o", "StrictHostKeyChecking=no",
         "-o", "ConnectTimeout=20",
-        f"{SSH_USER}@{ssh_host}",
+        f"{ssh_user}@{ssh_host}",
         "curl -s -4 ifconfig.me"
     ]
 

@@ -39,5 +39,6 @@ jobs:
           CF_555606_XYZ_MAIN_API_KEY: ${{ secrets.CF_555606_XYZ_MAIN_API_KEY }}
           XINJIAPO_555606_XYZ_MAIN_API_KEY: ${{ secrets.XINJIAPO_555606_XYZ_MAIN_API_KEY }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          AMD64_SSH_USERNAME: ${{ secrets.AMD64_SSH_USERNAME }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: python sync_monitors.py
