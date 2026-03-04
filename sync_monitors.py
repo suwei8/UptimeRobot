@@ -31,6 +31,15 @@ def mask_ip(ip):
         return f"{parts[0]}.{parts[1]}.***.***"
     return "***.***.***.***"
 
+def mask_host(host):
+    if not host: return str(host)
+    parts = host.split('.')
+    if len(parts) > 2:
+        return f"***.{parts[-2]}.{parts[-1]}"
+    elif len(parts) == 2:
+        return f"***.{parts[-1]}"
+    return "***"
+
 def get_headers(api_key):
     return {
         "Authorization": f"Bearer {api_key}",
@@ -74,20 +83,21 @@ def get_public_ip(ssh_host, cpu_type_ignored):
     ]
 
     try:
-        print(f"Connecting to {ssh_host} using {cloudflared_bin}...")
+        print(f"Connecting to {mask_host(ssh_host)} using {cloudflared_bin}...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         if result.returncode == 0:
             ip = result.stdout.strip()
             if len(ip.split('.')) == 4:
                 return ip
             else:
-                print(f"Invalid IP from {ssh_host}: {ip}")
+                print(f"Invalid IP from {mask_host(ssh_host)}: {ip}")
         else:
-            print(f"SSH failed for {ssh_host}: {result.stderr}")
+            stderr_masked = result.stderr.replace(ssh_host, mask_host(ssh_host))
+            print(f"SSH failed for {mask_host(ssh_host)}: {stderr_masked}")
     except subprocess.TimeoutExpired:
-        print(f"SSH timed out for {ssh_host}")
+        print(f"SSH timed out for {mask_host(ssh_host)}")
     except Exception as e:
-        print(f"Error checking {ssh_host}: {e}")
+        print(f"Error checking {mask_host(ssh_host)}: {e}")
     
     return None
 
