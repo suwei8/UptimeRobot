@@ -28,6 +28,21 @@ if not API_KEYS["arm64"] or not API_KEYS["amd64"]:
     print("Error: One or both Main_API_keys not set.")
     exit(1)
 
+# V2 API for alert contacts (V3 doesn't support this endpoint)
+V2_BASE = "https://api.uptimerobot.com/v2"
+
+def get_alert_contact_id(api_key):
+    try:
+        resp = requests.post(f"{V2_BASE}/getAlertContacts", data={"api_key": api_key, "format": "json"})
+        contacts = resp.json().get('alert_contacts', [])
+        if contacts:
+            cid = str(contacts[0]['id'])
+            print(f"Found alert contact: {contacts[0].get('value')} (ID: {cid})")
+            return cid
+    except Exception as e:
+        print(f"Failed to get alert contacts: {e}")
+    return None
+
 def mask_ip(ip):
     if not ip: return str(ip)
     parts = ip.split('.')
@@ -132,7 +147,7 @@ def get_current_monitors(api_key):
         print(f"Failed to fetch monitors: {e}")
         return {}
 
-def create_monitor(api_key, name, url, interval):
+def create_monitor(api_key, name, url, interval, alert_contact_id=None):
     api_url = f"{API_BASE}/monitors"
     payload = {
         'friendlyName': name,
@@ -141,6 +156,8 @@ def create_monitor(api_key, name, url, interval):
         'interval': interval,
         'timeout': 30
     }
+    if alert_contact_id:
+        payload['assignedAlertContacts'] = [{'alertContactId': alert_contact_id, 'threshold': 0, 'recurrence': 0}]
     try:
         resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
         if resp.status_code in [200, 201]:
@@ -150,7 +167,7 @@ def create_monitor(api_key, name, url, interval):
     except Exception as e:
         print(f"[CREATE ERROR] {name}: {e}")
 
-def create_monitor_typed(api_key, name, url, monitor_type, interval):
+def create_monitor_typed(api_key, name, url, monitor_type, interval, alert_contact_id=None):
     api_url = f"{API_BASE}/monitors"
     payload = {
         'friendlyName': name,
@@ -159,6 +176,8 @@ def create_monitor_typed(api_key, name, url, monitor_type, interval):
         'interval': interval,
         'timeout': 30
     }
+    if alert_contact_id:
+        payload['assignedAlertContacts'] = [{'alertContactId': alert_contact_id, 'threshold': 0, 'recurrence': 0}]
     try:
         resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
         if resp.status_code in [200, 201]:
@@ -193,11 +212,32 @@ def delete_monitor(api_key, monitor_id, name):
     except Exception as e:
         print(f"[DELETE ERROR] {name}: {e}")
 
+def bind_alert_contact(api_key, monitor_id, name, alert_contact_id):
+    api_url = f"{API_BASE}/monitors/{monitor_id}"
+    payload = {
+        "assignedAlertContacts": [{"alertContactId": alert_contact_id, "threshold": 0, "recurrence": 0}]
+    }
+    try:
+        resp = requests.patch(api_url, json=payload, headers=get_headers(api_key))
+        if resp.status_code in [200, 201]:
+            print(f"  [ALERT BOUND] {name}")
+        else:
+            print(f"  [ALERT FAIL] {name}: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  [ALERT ERROR] {name}: {e}")
+
 def main():
     servers = get_server_list()
     if not servers:
         print("No servers found.")
         return
+
+    # Auto-discover alert contact IDs
+    print("\n=== Discovering Alert Contacts ===")
+    alert_contacts = {
+        "arm64": get_alert_contact_id(API_KEYS["arm64"]),
+        "amd64": get_alert_contact_id(API_KEYS["amd64"])
+    }
 
     config_names_arm64 = {s.get('name') for s in servers if s.get('name') and s.get('cpu_type', 'amd64') == 'arm64'}
     config_names_amd64 = {s.get('name') for s in servers if s.get('name') and s.get('cpu_type', 'amd64') == 'amd64'}
@@ -218,6 +258,10 @@ def main():
         if name not in config_names_arm64:
             print(f"Monitor {name} not in arm64 config. Deleting...")
             delete_monitor(arm64_api_key, monitor['id'], name)
+        elif not monitor.get('assignedAlertContacts') and alert_contacts.get('arm64'):
+            print(f"Monitor {name} has no alert contact. Binding...")
+            bind_alert_contact(arm64_api_key, monitor['id'], name, alert_contacts['arm64'])
+            time.sleep(2)
 
     # 2. Process amd64 monitors (Xinjiapo_555606_xyz)
     print("\n=== Processing AMD64 monitors ===")
@@ -229,6 +273,10 @@ def main():
         if name not in config_names_amd64:
             print(f"Monitor {name} not in amd64 config. Deleting...")
             delete_monitor(amd64_api_key, monitor['id'], name)
+        elif not monitor.get('assignedAlertContacts') and alert_contacts.get('amd64'):
+            print(f"Monitor {name} has no alert contact. Binding...")
+            bind_alert_contact(amd64_api_key, monitor['id'], name, alert_contacts['amd64'])
+            time.sleep(2)
 
     # 3. Synchronize actual servers
     print("\n=== Synchronizing Server IPs ===")
@@ -269,7 +317,7 @@ def main():
                 print(f"IP unchanged for {name}. No action.")
         else:
             print(f"Monitor {name} does not exist. Creating...")
-            create_monitor(api_key, name, public_ip, interval)
+            create_monitor(api_key, name, public_ip, interval, alert_contacts.get(cpu_type))
             time.sleep(2)
 
     # 4. Synchronize extra static monitors (no SSH needed)
@@ -304,7 +352,7 @@ def main():
                     print(f"URL unchanged for {name}. No action.")
             else:
                 print(f"Extra monitor {name} does not exist. Creating...")
-                create_monitor_typed(api_key, name, url, monitor_type, 600)
+                create_monitor_typed(api_key, name, url, monitor_type, 600, alert_contacts.get(account))
                 time.sleep(2)
 
 if __name__ == "__main__":
