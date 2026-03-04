@@ -24,6 +24,13 @@ if not API_KEYS["arm64"] or not API_KEYS["amd64"]:
     print("Error: One or both Main_API_keys not set.")
     exit(1)
 
+def mask_ip(ip):
+    if not ip: return str(ip)
+    parts = ip.split('.')
+    if len(parts) == 4:
+        return f"{parts[0]}.{parts[1]}.***.***"
+    return "***.***.***.***"
+
 def get_headers(api_key):
     return {
         "Authorization": f"Bearer {api_key}",
@@ -110,9 +117,9 @@ def create_monitor(api_key, name, url, interval):
         resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
         data = resp.json()
         if data.get('stat') == 'ok':
-            print(f"[CREATED] {name} -> {url} (interval {interval}s)")
+            print(f"[CREATED] {name} -> {mask_ip(url)} (interval {interval}s)")
         else:
-            print(f"[CREATE FAIL] {name}: {data.get('error')}")
+            print(f"[CREATE FAIL] {name}: {data.get('error')} | Response: {resp.text}")
     except Exception as e:
         print(f"[CREATE ERROR] {name}: {e}")
 
@@ -125,7 +132,7 @@ def update_monitor(api_key, monitor_id, name, new_url):
         resp = requests.patch(api_url, json=payload, headers=get_headers(api_key))
         data = resp.json()
         if data.get('stat') == 'ok':
-            print(f"[UPDATED] {name} -> {new_url}")
+            print(f"[UPDATED] {name} -> {mask_ip(new_url)}")
         else:
             print(f"[UPDATE FAIL] {name}: {data.get('error')}")
     except Exception as e:
@@ -197,7 +204,7 @@ def main():
             print(f"Could not get public IP for {name}. Skipping update.")
             continue
 
-        print(f"Resolved IP: {public_ip}")
+        print(f"Resolved IP: {mask_ip(public_ip)}")
 
         current_monitors_for_type = arm64_monitors if cpu_type == "arm64" else amd64_monitors
 
@@ -205,7 +212,7 @@ def main():
             monitor = current_monitors_for_type[name]
             old_ip = monitor.get('url')
             if old_ip != public_ip:
-                print(f"IP changed for {name} ({old_ip} -> {public_ip}). Updating...")
+                print(f"IP changed for {name} ({mask_ip(old_ip)} -> {mask_ip(public_ip)}). Updating...")
                 update_monitor(api_key, monitor['id'], name, public_ip)
             else:
                 print(f"IP unchanged for {name}. No action.")
