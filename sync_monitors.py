@@ -126,11 +126,10 @@ def create_monitor(api_key, name, url, interval):
     }
     try:
         resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
-        data = resp.json()
-        if data.get('stat') == 'ok':
+        if resp.status_code in [200, 201]:
             print(f"[CREATED] {name} -> {mask_ip(url)} (interval {interval}s)")
         else:
-            print(f"[CREATE FAIL] {name}: {data.get('error')} | Response: {resp.text}")
+            print(f"[CREATE FAIL] {name}: HTTP {resp.status_code} | {resp.text[:200]}")
     except Exception as e:
         print(f"[CREATE ERROR] {name}: {e}")
 
@@ -141,11 +140,10 @@ def update_monitor(api_key, monitor_id, name, new_url):
     }
     try:
         resp = requests.patch(api_url, json=payload, headers=get_headers(api_key))
-        data = resp.json()
-        if data.get('stat') == 'ok':
+        if resp.status_code in [200, 201]:
             print(f"[UPDATED] {name} -> {mask_ip(new_url)}")
         else:
-            print(f"[UPDATE FAIL] {name}: {data.get('error')}")
+            print(f"[UPDATE FAIL] {name}: HTTP {resp.status_code} | {resp.text[:200]}")
     except Exception as e:
         print(f"[UPDATE ERROR] {name}: {e}")
 
@@ -225,11 +223,13 @@ def main():
             if old_ip != public_ip:
                 print(f"IP changed for {name} ({mask_ip(old_ip)} -> {mask_ip(public_ip)}). Updating...")
                 update_monitor(api_key, monitor['id'], name, public_ip)
+                time.sleep(2)
             else:
                 print(f"IP unchanged for {name}. No action.")
         else:
             print(f"Monitor {name} does not exist. Creating...")
             create_monitor(api_key, name, public_ip, interval)
+            time.sleep(2)
 
 if __name__ == "__main__":
     main()
