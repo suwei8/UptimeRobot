@@ -8,6 +8,7 @@ import sys
 
 # Configuration
 CONFIG_URL = os.getenv("HOSTS_CONFIG_URL")
+EXTRA_CONFIG_URL = os.getenv("EXTRA_HOSTS_CONFIG_URL")
 
 API_KEYS = {
     "arm64": os.getenv("CF_555606_XYZ_MAIN_API_KEY"),
@@ -57,6 +58,18 @@ def get_server_list():
         return resp.json()
     except Exception as e:
         print(f"Failed to fetch config: {e}")
+        return []
+
+def get_extra_monitors_list():
+    if not EXTRA_CONFIG_URL:
+        return []
+    try:
+        print(f"Fetching extra config from {EXTRA_CONFIG_URL}...")
+        resp = requests.get(EXTRA_CONFIG_URL, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Failed to fetch extra config: {e}")
         return []
 
 def get_cloudflared_binary():
@@ -137,6 +150,24 @@ def create_monitor(api_key, name, url, interval):
     except Exception as e:
         print(f"[CREATE ERROR] {name}: {e}")
 
+def create_monitor_typed(api_key, name, url, monitor_type, interval):
+    api_url = f"{API_BASE}/monitors"
+    payload = {
+        'friendlyName': name,
+        'url': url,
+        'type': monitor_type,
+        'interval': interval,
+        'timeout': 30
+    }
+    try:
+        resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
+        if resp.status_code in [200, 201]:
+            print(f"[CREATED] {name} -> {url} ({monitor_type}, interval {interval}s)")
+        else:
+            print(f"[CREATE FAIL] {name}: HTTP {resp.status_code} | {resp.text[:200]}")
+    except Exception as e:
+        print(f"[CREATE ERROR] {name}: {e}")
+
 def update_monitor(api_key, monitor_id, name, new_url):
     api_url = f"{API_BASE}/monitors/{monitor_id}"
     payload = {
@@ -170,6 +201,12 @@ def main():
 
     config_names_arm64 = {s.get('name') for s in servers if s.get('name') and s.get('cpu_type', 'amd64') == 'arm64'}
     config_names_amd64 = {s.get('name') for s in servers if s.get('name') and s.get('cpu_type', 'amd64') == 'amd64'}
+
+    # Fetch extra static monitors
+    extra_monitors = get_extra_monitors_list()
+    extra_names_amd64 = {e.get('name') for e in extra_monitors if e.get('name') and e.get('account') == 'amd64'}
+    # Merge extra names into amd64 config so they won't be deleted
+    config_names_amd64 = config_names_amd64 | extra_names_amd64
 
     # 1. Process arm64 monitors (cf_555606_xyz)
     print("\n=== Processing ARM64 monitors ===")
@@ -234,6 +271,41 @@ def main():
             print(f"Monitor {name} does not exist. Creating...")
             create_monitor(api_key, name, public_ip, interval)
             time.sleep(2)
+
+    # 4. Synchronize extra static monitors (no SSH needed)
+    if extra_monitors:
+        print("\n=== Synchronizing Extra Static Monitors ===")
+        amd64_api_key = API_KEYS["amd64"]
+        # Refresh amd64 monitors after dynamic sync
+        amd64_monitors = get_current_monitors(amd64_api_key)
+        for em in extra_monitors:
+            name = em.get('name')
+            url = em.get('url')
+            monitor_type = em.get('type', 'PING')
+            account = em.get('account', 'amd64')
+
+            if not name or not url:
+                continue
+
+            api_key = API_KEYS.get(account)
+            if not api_key:
+                print(f"Skipping extra {name}: Unknown account {account}")
+                continue
+
+            print(f"\n--- Extra: {name} ({monitor_type}) ---")
+            if name in amd64_monitors:
+                monitor = amd64_monitors[name]
+                old_url = monitor.get('url')
+                if old_url != url:
+                    print(f"URL changed for {name}. Updating...")
+                    update_monitor(api_key, monitor['id'], name, url)
+                    time.sleep(2)
+                else:
+                    print(f"URL unchanged for {name}. No action.")
+            else:
+                print(f"Extra monitor {name} does not exist. Creating...")
+                create_monitor_typed(api_key, name, url, monitor_type, 600)
+                time.sleep(2)
 
 if __name__ == "__main__":
     main()
