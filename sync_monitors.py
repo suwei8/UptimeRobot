@@ -111,7 +111,8 @@ def create_monitor(api_key, name, url, interval):
         'friendlyName': name,
         'url': url,
         'type': 'PING', 
-        'interval': interval 
+        'interval': interval,
+        'timeout': 30
     }
     try:
         resp = requests.post(api_url, json=payload, headers=get_headers(api_key))
