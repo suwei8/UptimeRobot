@@ -5,6 +5,7 @@ import subprocess
 import time
 import platform
 import sys
+from datetime import datetime, timezone, timedelta
 
 # Configuration
 CONFIG_URL = os.getenv("HOSTS_CONFIG_URL")
@@ -20,6 +21,9 @@ SSH_USERS = {
     "amd64": os.getenv("AMD64_SSH_USERNAME")
 }
 SSH_PASS = os.getenv("SSH_PASSWORD")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # API V3 configuration
 API_BASE = "https://api.uptimerobot.com/v3"
@@ -42,6 +46,62 @@ def get_alert_contact_id(api_key):
     except Exception as e:
         print(f"Failed to get alert contacts: {e}")
     return None
+
+# Country flag emoji mapping based on server name prefix
+COUNTRY_FLAGS = {
+    "SG": "🇸🇬", "US": "🇺🇸", "JP": "🇯🇵", "KR": "🇰🇷",
+    "ID": "🇮🇩", "AU": "🇦🇺", "ES": "🇪🇸", "DU": "🇦🇪",
+    "JBP": "🇲🇾", "AWS": "🇺🇸"
+}
+
+def get_country_flag(name):
+    for prefix, flag in COUNTRY_FLAGS.items():
+        if name.startswith(prefix):
+            return flag
+    return "🌐"
+
+def send_telegram_ip_report(arm64_ips, arm64_failed):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials not set. Skipping IP report.")
+        return
+
+    cst = timezone(timedelta(hours=8))
+    now_str = datetime.now(cst).strftime("%Y-%m-%d %H:%M CST")
+
+    lines = ["📡 <b>ARM64 服务器 IP 清单</b>", "━━━━━━━━━━━━━━━━"]
+    for name, ip in arm64_ips:
+        flag = get_country_flag(name)
+        lines.append(f"{flag} <code>{name}</code> → <code>{ip}</code>")
+
+    lines.append("━━━━━━━━━━━━━━━━")
+
+    if arm64_failed:
+        lines.append("")
+        lines.append("❌ <b>获取失败:</b>")
+        for name in arm64_failed:
+            flag = get_country_flag(name)
+            lines.append(f"{flag} <code>{name}</code> → 获取失败")
+
+    lines.append("")
+    lines.append(f"✅ 共 {len(arm64_ips)} 台 | ❌ {len(arm64_failed)} 台获取失败")
+    lines.append(f"⏰ {now_str}")
+
+    message = "\n".join(lines)
+
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code == 200:
+            print("\n[TELEGRAM] IP report sent successfully.")
+        else:
+            print(f"\n[TELEGRAM FAIL] HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        print(f"\n[TELEGRAM ERROR] {e}")
 
 def mask_ip(ip):
     if not ip: return str(ip)
@@ -288,6 +348,8 @@ def main():
 
     # 3. Synchronize actual servers
     update_failures = 0
+    arm64_ips = []
+    arm64_failed = []
     print("\n=== Synchronizing Server IPs ===")
     for server in servers:
         name = server.get('name')
@@ -309,9 +371,15 @@ def main():
         
         if not public_ip:
             print(f"Could not get public IP for {name}. Skipping update.")
+            if cpu_type == "arm64":
+                arm64_failed.append(name)
             continue
 
         print(f"Resolved IP: {mask_ip(public_ip)}")
+
+        # Collect ARM64 IPs for Telegram report
+        if cpu_type == "arm64":
+            arm64_ips.append((name, public_ip))
 
         current_monitors_for_type = arm64_monitors if cpu_type == "arm64" else amd64_monitors
 
@@ -364,6 +432,10 @@ def main():
                 print(f"Extra monitor {name} does not exist. Creating...")
                 create_monitor_typed(api_key, name, url, monitor_type, 600, alert_contacts.get(account))
                 time.sleep(2)
+
+    # 5. Send ARM64 IP report to Telegram
+    print("\n=== Sending ARM64 IP Report to Telegram ===")
+    send_telegram_ip_report(arm64_ips, arm64_failed)
 
     if update_failures > 0:
         print(f"\n⚠ {update_failures} monitor(s) failed to update!")
