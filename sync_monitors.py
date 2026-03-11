@@ -191,19 +191,23 @@ def create_monitor_typed(api_key, name, url, monitor_type, interval, alert_conta
     except Exception as e:
         print(f"[CREATE ERROR] {name}: {e}")
 
-def update_monitor(api_key, monitor_id, name, new_url):
+def update_monitor(api_key, monitor_id, name, new_url, monitor_type="PING"):
     api_url = f"{API_BASE}/monitors/{monitor_id}"
     payload = {
-        'url': new_url
+        'url': new_url,
+        'type': monitor_type
     }
     try:
         resp = requests.patch(api_url, json=payload, headers=get_headers(api_key))
         if resp.status_code in [200, 201]:
             print(f"[UPDATED] {name} -> {mask_ip(new_url)}")
+            return True
         else:
             print(f"[UPDATE FAIL] {name}: HTTP {resp.status_code} | {resp.text[:200]}")
+            return False
     except Exception as e:
         print(f"[UPDATE ERROR] {name}: {e}")
+        return False
 
 def delete_monitor(api_key, monitor_id, name):
     api_url = f"{API_BASE}/monitors/{monitor_id}"
@@ -283,6 +287,7 @@ def main():
             time.sleep(2)
 
     # 3. Synchronize actual servers
+    update_failures = 0
     print("\n=== Synchronizing Server IPs ===")
     for server in servers:
         name = server.get('name')
@@ -315,7 +320,8 @@ def main():
             old_ip = monitor.get('url')
             if old_ip != public_ip:
                 print(f"IP changed for {name} ({mask_ip(old_ip)} -> {mask_ip(public_ip)}). Updating...")
-                update_monitor(api_key, monitor['id'], name, public_ip)
+                if not update_monitor(api_key, monitor['id'], name, public_ip):
+                    update_failures += 1
                 time.sleep(2)
             else:
                 print(f"IP unchanged for {name}. No action.")
@@ -358,6 +364,10 @@ def main():
                 print(f"Extra monitor {name} does not exist. Creating...")
                 create_monitor_typed(api_key, name, url, monitor_type, 600, alert_contacts.get(account))
                 time.sleep(2)
+
+    if update_failures > 0:
+        print(f"\n⚠ {update_failures} monitor(s) failed to update!")
+        exit(1)
 
 if __name__ == "__main__":
     main()
