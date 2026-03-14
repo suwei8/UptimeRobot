@@ -2,7 +2,7 @@ name: Sync UptimeRobot Monitors
 
 on:
   schedule:
-    - cron: '0 2 * * 1' # Every Monday at 10:00 AM CST (UTC+2)
+    - cron: '0 2,10,18 * * *' # Every 8 hours (10:00/18:00/02:00 CST)
   workflow_dispatch:
 
 jobs:
