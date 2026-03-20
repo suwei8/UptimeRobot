@@ -5,7 +5,31 @@ import subprocess
 import time
 import platform
 import sys
+import ipaddress
+import re
+import glob
+import argparse
 from datetime import datetime, timezone, timedelta
+
+def load_local_env_file(env_path=".env"):
+    if not os.path.exists(env_path):
+        return
+
+    try:
+        with open(env_path, "r", encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip("'").strip('"')
+                os.environ.setdefault(key, value)
+    except OSError as exc:
+        print(f"Warning: failed to load {env_path}: {exc}")
+
+load_local_env_file()
 
 # Configuration
 CONFIG_URL = os.getenv("HOSTS_CONFIG_URL")
@@ -25,15 +49,26 @@ SSH_PASS = os.getenv("SSH_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID")
+CLOUDFLARE_RULESET_ID = os.getenv("CLOUDFLARE_RULESET_ID")
+CLOUDFLARE_RULE_ID = os.getenv("CLOUDFLARE_RULE_ID")
+CLOUDFLARE_RULE_DESCRIPTION = os.getenv(
+    "CLOUDFLARE_RULE_DESCRIPTION",
+    "Allow Only Server IP List to batam2-ai"
+)
+CLOUDFLARE_RULE_EXPRESSION_TEMPLATE = os.getenv("CLOUDFLARE_RULE_EXPRESSION_TEMPLATE")
+
 # API V3 configuration
 API_BASE = "https://api.uptimerobot.com/v3"
 
-if not API_KEYS["arm64"] or not API_KEYS["amd64"]:
-    print("Error: One or both Main_API_keys not set.")
-    exit(1)
-
 # V2 API for alert contacts (V3 doesn't support this endpoint)
 V2_BASE = "https://api.uptimerobot.com/v2"
+
+def require_uptimerobot_api_keys():
+    if not API_KEYS["arm64"] or not API_KEYS["amd64"]:
+        raise RuntimeError("One or both UptimeRobot Main API keys are not set.")
 
 def get_alert_contact_id(api_key):
     try:
@@ -60,7 +95,10 @@ def get_country_flag(name):
             return flag
     return "🌐"
 
-def send_telegram_ip_report(arm64_ips, arm64_failed):
+def format_telegram_ip(ip_value):
+    return ip_value if ip_value else "N/A"
+
+def send_telegram_ip_report(arm64_reports):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials not set. Skipping IP report.")
         return
@@ -69,24 +107,32 @@ def send_telegram_ip_report(arm64_ips, arm64_failed):
     now_str = datetime.now(cst).strftime("%Y-%m-%d %H:%M CST")
 
     lines = ["📡 <b>ARM64 服务器 IP 清单</b>", "━━━━━━━━━━━━━━━━"]
-    for name, ip in arm64_ips:
-        flag = get_country_flag(name)
-        lines.append(f"{flag} <code>{name}</code> → <code>{ip}</code>")
+    for report in arm64_reports:
+        flag = get_country_flag(report["name"])
+        lines.append(f"{flag} <code>{report['name']}</code>")
+        lines.append(f"IPv4 → <code>{format_telegram_ip(report['ipv4'])}</code>")
+        lines.append(f"IPv6 → <code>{format_telegram_ip(report['ipv6'])}</code>")
+        lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━━")
 
-    if arm64_failed:
+    failed_reports = [report for report in arm64_reports if not report["ipv4"] and not report["ipv6"]]
+    if failed_reports:
         lines.append("")
         lines.append("❌ <b>获取失败:</b>")
-        for name in arm64_failed:
-            flag = get_country_flag(name)
-            lines.append(f"{flag} <code>{name}</code> → 获取失败")
+        for report in failed_reports:
+            flag = get_country_flag(report["name"])
+            lines.append(f"{flag} <code>{report['name']}</code> → IPv4 / IPv6 均获取失败")
 
+    ipv4_count = sum(1 for report in arm64_reports if report["ipv4"])
+    ipv6_count = sum(1 for report in arm64_reports if report["ipv6"])
     lines.append("")
-    lines.append(f"✅ 共 {len(arm64_ips)} 台 | ❌ {len(arm64_failed)} 台获取失败")
+    lines.append(
+        f"✅ 共 {len(arm64_reports)} 台 | IPv4 {ipv4_count} 台 | IPv6 {ipv6_count} 台 | ❌ {len(failed_reports)} 台完全失败"
+    )
     lines.append(f"⏰ {now_str}")
 
-    message = "\n".join(lines)
+    message = "\n".join(line for line in lines if line is not None)
 
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -104,11 +150,19 @@ def send_telegram_ip_report(arm64_ips, arm64_failed):
         print(f"\n[TELEGRAM ERROR] {e}")
 
 def mask_ip(ip):
-    if not ip: return str(ip)
-    parts = ip.split('.')
-    if len(parts) == 4:
+    if not ip:
+        return str(ip)
+    try:
+        parsed = ipaddress.ip_address(ip)
+    except ValueError:
+        return "***"
+
+    if parsed.version == 4:
+        parts = ip.split('.')
         return f"{parts[0]}.{parts[1]}.***.***"
-    return "***.***.***.***"
+
+    parts = parsed.exploded.split(':')
+    return f"{parts[0]}:{parts[1]}:****:****:****:{parts[-2]}:{parts[-1]}"
 
 def mask_host(host):
     if not host: return str(host)
@@ -156,7 +210,18 @@ def get_cloudflared_binary():
     binary_path = os.path.join("bin", f"cloudflared-linux-{arch}")
     return binary_path
 
-def get_public_ip(ssh_host, cpu_type, server_name=None):
+def parse_ip_value(value, version):
+    if not value:
+        return None
+    try:
+        parsed = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if parsed.version != version:
+        return None
+    return str(parsed)
+
+def get_public_ips(ssh_host, cpu_type, server_name=None):
     # Special case: US-GCP俄勒冈 uses ARM64 SSH username despite being amd64
     if server_name == "US-GCP俄勒冈":
         ssh_user = SSH_USERS.get("arm64")
@@ -164,29 +229,42 @@ def get_public_ip(ssh_host, cpu_type, server_name=None):
         ssh_user = SSH_USERS.get(cpu_type)
     if not ssh_user or not SSH_PASS:
         print("Skipping IP fetch: SSH credentials missing.")
-        return None
+        return {"ipv4": None, "ipv6": None}
 
     cloudflared_bin = get_cloudflared_binary()
     proxy_cmd = f"{cloudflared_bin} access ssh --hostname {ssh_host}"
+    remote_cmd = (
+        "sh -lc '"
+        "ipv4=$(curl -fsS -4 --max-time 10 https://ifconfig.me/ip 2>/dev/null || true); "
+        "ipv6=$(curl -fsS -6 --max-time 10 https://ifconfig.me/ip 2>/dev/null || true); "
+        "printf \"ipv4=%s\\nipv6=%s\\n\" \"$ipv4\" \"$ipv6\""
+        "'"
+    )
     cmd = [
         "sshpass", "-p", SSH_PASS,
-        "ssh", 
+        "ssh",
         "-o", f"ProxyCommand={proxy_cmd}",
         "-o", "StrictHostKeyChecking=no",
         "-o", "ConnectTimeout=20",
         f"{ssh_user}@{ssh_host}",
-        "curl -s -4 ifconfig.me"
+        remote_cmd
     ]
 
     try:
         print(f"Connecting to {mask_host(ssh_host)} using {cloudflared_bin}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode == 0:
-            ip = result.stdout.strip()
-            if len(ip.split('.')) == 4:
-                return ip
-            else:
-                print(f"Invalid IP from {mask_host(ssh_host)}: {ip}")
+            ipv4 = None
+            ipv6 = None
+            for line in result.stdout.splitlines():
+                if line.startswith("ipv4="):
+                    ipv4 = parse_ip_value(line.split("=", 1)[1], 4)
+                elif line.startswith("ipv6="):
+                    ipv6 = parse_ip_value(line.split("=", 1)[1], 6)
+
+            if not ipv4 and not ipv6:
+                print(f"Invalid IP output from {mask_host(ssh_host)}: {result.stdout.strip()}")
+            return {"ipv4": ipv4, "ipv6": ipv6}
         else:
             stderr_masked = result.stderr.replace(ssh_host, mask_host(ssh_host))
             print(f"SSH failed for {mask_host(ssh_host)}: {stderr_masked}")
@@ -194,8 +272,63 @@ def get_public_ip(ssh_host, cpu_type, server_name=None):
         print(f"SSH timed out for {mask_host(ssh_host)}")
     except Exception as e:
         print(f"Error checking {mask_host(ssh_host)}: {e}")
-    
-    return None
+
+    return {"ipv4": None, "ipv6": None}
+
+def collect_server_result(server):
+    name = server.get("name")
+    ssh_host = server.get("ssh_host")
+    cpu_type = server.get("cpu_type", "amd64")
+
+    if not name or not ssh_host:
+        raise RuntimeError("Server definition must include both 'name' and 'ssh_host'.")
+
+    public_ips = get_public_ips(ssh_host, cpu_type, server_name=name)
+    ipv4 = public_ips["ipv4"]
+    ipv6 = public_ips["ipv6"]
+
+    if ipv4 and ipv6:
+        status = "ok"
+    elif ipv4 or ipv6:
+        status = "partial"
+    else:
+        status = "failed"
+
+    return {
+        "name": name,
+        "cpu_type": cpu_type,
+        "ssh_host": ssh_host,
+        "ipv4": ipv4,
+        "ipv6": ipv6,
+        "status": status
+    }
+
+def save_json(path, payload):
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as output_file:
+        json.dump(payload, output_file, ensure_ascii=False, indent=2)
+        output_file.write("\n")
+
+def load_collected_results(results_dir):
+    result_map = {}
+    for path in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
+        try:
+            with open(path, "r", encoding="utf-8") as result_file:
+                payload = json.load(result_file)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Skipping invalid collected result {path}: {exc}")
+            continue
+
+        name = payload.get("name")
+        if not name:
+            print(f"Skipping collected result without server name: {path}")
+            continue
+
+        result_map[name] = payload
+
+    return result_map
 
 def get_current_monitors(api_key):
     url = f"{API_BASE}/monitors"
@@ -294,12 +427,145 @@ def bind_alert_contact(api_key, monitor_id, name, alert_contact_id):
     except Exception as e:
         print(f"  [ALERT ERROR] {name}: {e}")
 
-def main():
-    servers = get_server_list()
-    if not servers:
-        print("No servers found.")
+def get_cloudflare_scope():
+    if CLOUDFLARE_ZONE_ID:
+        return "zones", CLOUDFLARE_ZONE_ID
+    if CLOUDFLARE_ACCOUNT_ID:
+        return "accounts", CLOUDFLARE_ACCOUNT_ID
+    return None, None
+
+def cloudflare_is_configured():
+    scope_type, scope_id = get_cloudflare_scope()
+    return bool(CLOUDFLARE_API_TOKEN and CLOUDFLARE_RULESET_ID and scope_type and scope_id)
+
+def cloudflare_headers():
+    return {
+        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+def cloudflare_request(method, path, payload=None):
+    url = f"https://api.cloudflare.com/client/v4{path}"
+    response = requests.request(
+        method,
+        url,
+        headers=cloudflare_headers(),
+        json=payload,
+        timeout=30
+    )
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"Cloudflare API returned non-JSON response: HTTP {response.status_code}") from exc
+
+    if not response.ok or not data.get("success", False):
+        raise RuntimeError(
+            f"Cloudflare API error on {method} {path}: HTTP {response.status_code} | "
+            f"errors={json.dumps(data.get('errors', []), ensure_ascii=False)}"
+        )
+
+    return data.get("result")
+
+def find_cloudflare_target_rule(rules):
+    if CLOUDFLARE_RULE_ID:
+        for rule in rules:
+            if rule.get("id") == CLOUDFLARE_RULE_ID:
+                return rule
+        raise RuntimeError(f"Cloudflare rule ID not found: {CLOUDFLARE_RULE_ID}")
+
+    matches = [rule for rule in rules if rule.get("description") == CLOUDFLARE_RULE_DESCRIPTION]
+    if not matches:
+        raise RuntimeError(
+            f"Cloudflare rule not found by description: {CLOUDFLARE_RULE_DESCRIPTION}. "
+            "Set CLOUDFLARE_RULE_ID if the rule description does not match exactly."
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Multiple Cloudflare rules matched description: {CLOUDFLARE_RULE_DESCRIPTION}. "
+            "Set CLOUDFLARE_RULE_ID to disambiguate."
+        )
+    return matches[0]
+
+def sort_ip_key(ip_value):
+    parsed = ipaddress.ip_address(ip_value)
+    return (parsed.version, int(parsed))
+
+def build_cloudflare_ip_set(ip_values):
+    unique_ips = sorted(set(ip_values), key=sort_ip_key)
+    if not unique_ips:
+        raise RuntimeError("No server IPs were collected; refusing to clear the Cloudflare allowlist rule.")
+    return "{ " + " ".join(unique_ips) + " }"
+
+def replace_ip_src_set(expression, ip_set_literal):
+    updated_expression, replacements = re.subn(
+        r'ip\.src\s+in\s*\{[^{}]*\}',
+        f"ip.src in {ip_set_literal}",
+        expression,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+    if replacements == 1:
+        return updated_expression
+
+    if CLOUDFLARE_RULE_EXPRESSION_TEMPLATE:
+        if "__IP_SET__" not in CLOUDFLARE_RULE_EXPRESSION_TEMPLATE:
+            raise RuntimeError("CLOUDFLARE_RULE_EXPRESSION_TEMPLATE must contain the __IP_SET__ placeholder.")
+        return CLOUDFLARE_RULE_EXPRESSION_TEMPLATE.replace("__IP_SET__", ip_set_literal)
+
+    raise RuntimeError(
+        "Could not find an inline 'ip.src in { ... }' set in the existing Cloudflare rule expression. "
+        "Provide CLOUDFLARE_RULE_EXPRESSION_TEMPLATE with an __IP_SET__ placeholder if the rule needs full reconstruction."
+    )
+
+def build_cloudflare_rule_payload(rule, new_expression):
+    payload = {
+        "action": rule["action"],
+        "expression": new_expression
+    }
+
+    for field in (
+        "description",
+        "enabled",
+        "ref",
+        "action_parameters",
+        "logging",
+        "ratelimit",
+        "exposed_credential_check"
+    ):
+        if field in rule:
+            payload[field] = rule[field]
+
+    return payload
+
+def update_cloudflare_server_ip_rule(collected_ips):
+    if not cloudflare_is_configured():
+        print("Cloudflare rule sync not configured. Skipping security rule update.")
         return
 
+    scope_type, scope_id = get_cloudflare_scope()
+    ip_set_literal = build_cloudflare_ip_set(collected_ips)
+    ruleset_path = f"/{scope_type}/{scope_id}/rulesets/{CLOUDFLARE_RULESET_ID}"
+    ruleset = cloudflare_request("GET", ruleset_path)
+    target_rule = find_cloudflare_target_rule(ruleset.get("rules", []))
+
+    current_expression = target_rule.get("expression", "")
+    new_expression = replace_ip_src_set(current_expression, ip_set_literal)
+
+    if new_expression == current_expression:
+        print("Cloudflare rule expression already matches collected IP set. No action.")
+        return
+
+    payload = build_cloudflare_rule_payload(target_rule, new_expression)
+    update_path = f"{ruleset_path}/rules/{target_rule['id']}"
+    cloudflare_request("PATCH", update_path, payload)
+    print(
+        f"Updated Cloudflare rule '{target_rule.get('description') or target_rule.get('id')}' "
+        f"with {len(set(collected_ips))} collected server IPs."
+    )
+
+def synchronize_with_results(servers, collected_results):
+    require_uptimerobot_api_keys()
     # Auto-discover alert contact IDs
     print("\n=== Discovering Alert Contacts ===")
     alert_contacts = {
@@ -348,9 +614,9 @@ def main():
 
     # 3. Synchronize actual servers
     update_failures = 0
-    arm64_ips = []
-    arm64_failed = []
-    print("\n=== Synchronizing Server IPs ===")
+    arm64_reports = []
+    collected_server_ips = set()
+    print("\n=== Synchronizing Server IPs From Collected Results ===")
     for server in servers:
         name = server.get('name')
         ssh_host = server.get('ssh_host')
@@ -366,36 +632,56 @@ def main():
             
         interval = 300 if cpu_type == "arm64" else 600
 
-        print(f"\n--- Checking {name} ({cpu_type}) ---")
-        public_ip = get_public_ip(ssh_host, cpu_type, server_name=name)
-        
-        if not public_ip:
-            print(f"Could not get public IP for {name}. Skipping update.")
+        print(f"\n--- Applying {name} ({cpu_type}) ---")
+        result = collected_results.get(name)
+        if result is None:
+            print(f"No collected result found for {name}. Treating IPv4/IPv6 as unavailable.")
+            public_ipv4 = None
+            public_ipv6 = None
+        else:
+            public_ipv4 = result.get("ipv4")
+            public_ipv6 = result.get("ipv6")
+
+        if public_ipv4:
+            print(f"Resolved IPv4: {mask_ip(public_ipv4)}")
             if cpu_type == "arm64":
-                arm64_failed.append(name)
-            continue
+                collected_server_ips.add(public_ipv4)
+        else:
+            print(f"IPv4 unavailable for {name}.")
 
-        print(f"Resolved IP: {mask_ip(public_ip)}")
+        if public_ipv6:
+            print(f"Resolved IPv6: {mask_ip(public_ipv6)}")
+            if cpu_type == "arm64":
+                collected_server_ips.add(public_ipv6)
+        else:
+            print(f"IPv6 unavailable for {name}.")
 
-        # Collect ARM64 IPs for Telegram report
         if cpu_type == "arm64":
-            arm64_ips.append((name, public_ip))
+            arm64_reports.append({
+                "name": name,
+                "ipv4": public_ipv4,
+                "ipv6": public_ipv6
+            })
+
+        if not public_ipv4:
+            print(f"Could not get IPv4 for {name}. Skipping monitor update.")
+            continue
 
         current_monitors_for_type = arm64_monitors if cpu_type == "arm64" else amd64_monitors
 
         if name in current_monitors_for_type:
             monitor = current_monitors_for_type[name]
             old_ip = monitor.get('url')
-            if old_ip != public_ip:
-                print(f"IP changed for {name} ({mask_ip(old_ip)} -> {mask_ip(public_ip)}). Updating...")
-                if not update_monitor(api_key, monitor['id'], name, public_ip):
+            if old_ip != public_ipv4:
+                print(f"IP changed for {name} ({mask_ip(old_ip)} -> {mask_ip(public_ipv4)}). Updating...")
+                if not update_monitor(api_key, monitor['id'], name, public_ipv4):
                     update_failures += 1
                 time.sleep(2)
             else:
                 print(f"IP unchanged for {name}. No action.")
         else:
             print(f"Monitor {name} does not exist. Creating...")
-            create_monitor(api_key, name, public_ip, interval, alert_contacts.get(cpu_type))
+            create_monitor(api_key, name, public_ipv4, interval, alert_contacts.get(cpu_type))
             time.sleep(2)
 
     # 4. Synchronize extra static monitors (no SSH needed)
@@ -433,13 +719,101 @@ def main():
                 create_monitor_typed(api_key, name, url, monitor_type, 600, alert_contacts.get(account))
                 time.sleep(2)
 
-    # 5. Send ARM64 IP report to Telegram
+    # 5. Update Cloudflare allowlist rule with collected ARM64 server IPs only
+    print("\n=== Updating Cloudflare Security Rule ===")
+    update_cloudflare_server_ip_rule(collected_server_ips)
+
+    # 6. Send ARM64 IP report to Telegram
     print("\n=== Sending ARM64 IP Report to Telegram ===")
-    send_telegram_ip_report(arm64_ips, arm64_failed)
+    send_telegram_ip_report(arm64_reports)
 
     if update_failures > 0:
         print(f"\n⚠ {update_failures} monitor(s) failed to update!")
         exit(1)
+
+def run_full_sync():
+    servers = get_server_list()
+    if not servers:
+        print("No servers found.")
+        return
+
+    collected_results = {}
+    print("\n=== Collecting Server IPs Directly ===")
+    for server in servers:
+        name = server.get("name")
+        ssh_host = server.get("ssh_host")
+        if not name or not ssh_host:
+            continue
+
+        cpu_type = server.get("cpu_type", "amd64")
+        print(f"\n--- Collecting {name} ({cpu_type}) ---")
+        try:
+            collected_results[name] = collect_server_result(server)
+        except Exception as exc:
+            print(f"Collection error for {name}: {exc}")
+            collected_results[name] = {
+                "name": name,
+                "cpu_type": cpu_type,
+                "ssh_host": ssh_host,
+                "ipv4": None,
+                "ipv6": None,
+                "status": "failed"
+            }
+
+    synchronize_with_results(servers, collected_results)
+
+def run_collect_mode(args):
+    server = {
+        "name": args.name,
+        "cpu_type": args.cpu_type,
+        "ssh_host": args.ssh_host
+    }
+    result = collect_server_result(server)
+    save_json(args.output, result)
+    print(
+        f"Collected {result['name']} ({result['cpu_type']}): "
+        f"IPv4={mask_ip(result['ipv4']) if result['ipv4'] else 'N/A'}, "
+        f"IPv6={mask_ip(result['ipv6']) if result['ipv6'] else 'N/A'}"
+    )
+
+def run_aggregate_mode(args):
+    servers = get_server_list()
+    if not servers:
+        print("No servers found.")
+        return
+
+    collected_results = load_collected_results(args.results_dir)
+    print(f"Loaded {len(collected_results)} collected server result(s) from {args.results_dir}.")
+    synchronize_with_results(servers, collected_results)
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(description="Sync UptimeRobot monitors and server IP allowlists.")
+    subparsers = parser.add_subparsers(dest="command")
+
+    collect_parser = subparsers.add_parser("collect", help="Collect IPv4/IPv6 for a single server.")
+    collect_parser.add_argument("--name", required=True, help="Server display name.")
+    collect_parser.add_argument("--cpu-type", default="amd64", help="Server CPU type.")
+    collect_parser.add_argument("--ssh-host", required=True, help="SSH hostname.")
+    collect_parser.add_argument("--output", required=True, help="Output JSON path.")
+
+    aggregate_parser = subparsers.add_parser("aggregate", help="Aggregate collected results and update services.")
+    aggregate_parser.add_argument("--results-dir", required=True, help="Directory containing collected JSON result files.")
+
+    return parser
+
+def main():
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    if args.command == "collect":
+        run_collect_mode(args)
+        return
+
+    if args.command == "aggregate":
+        run_aggregate_mode(args)
+        return
+
+    run_full_sync()
 
 if __name__ == "__main__":
     main()

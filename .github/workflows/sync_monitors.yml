@@ -6,8 +6,69 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      servers: ${{ steps.matrix.outputs.servers }}
+      server_count: ${{ steps.matrix.outputs.server_count }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Build server matrix
+        id: matrix
+        env:
+          HOSTS_CONFIG_URL: ${{ secrets.HOSTS_CONFIG_URL }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import requests
+
+          url = os.environ["HOSTS_CONFIG_URL"]
+          response = requests.get(url, timeout=15)
+          response.raise_for_status()
+          servers = response.json()
+
+          matrix = []
+          for index, server in enumerate(servers, start=1):
+              name = server.get("name")
+              ssh_host = server.get("ssh_host")
+              if not name or not ssh_host:
+                  continue
+
+              cpu_type = server.get("cpu_type", "amd64")
+              slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-").lower() or f"server-{index}"
+              matrix.append({
+                  "index": index,
+                  "name": name,
+                  "cpu_type": cpu_type,
+                  "ssh_host": ssh_host,
+                  "result_file": f"{index:03d}-{slug}.json",
+                  "artifact_name": f"collected-{index:03d}-{slug}"
+              })
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"servers={json.dumps(matrix, ensure_ascii=True)}\n")
+              fh.write(f"server_count={len(matrix)}\n")
+          PY
+
+  collect:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.servers) }}
+    name: Collect ${{ matrix.name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -23,25 +84,96 @@ jobs:
 
       - name: Setup Cloudflared Binaries
         run: |
-          # Use local binaries from bin/ directory
-          # Make them executable
           chmod +x bin/cloudflared-linux-amd64
-          
-          # List to verify
           ls -l bin/
 
       - name: Install sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
 
-      - name: Run Sync Script
+      - name: Collect server IPs
+        env:
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          AMD64_SSH_USERNAME: ${{ secrets.AMD64_SSH_USERNAME }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SERVER_NAME: ${{ matrix.name }}
+          SERVER_CPU_TYPE: ${{ matrix.cpu_type }}
+          SERVER_SSH_HOST: ${{ matrix.ssh_host }}
+          RESULT_PATH: collected/${{ matrix.result_file }}
+        run: |
+          mkdir -p collected
+          if ! python sync_monitors.py collect \
+            --name "$SERVER_NAME" \
+            --cpu-type "$SERVER_CPU_TYPE" \
+            --ssh-host "$SERVER_SSH_HOST" \
+            --output "$RESULT_PATH"; then
+            python - <<'PY'
+            import json
+            import os
+
+            path = os.environ["RESULT_PATH"]
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload = {
+                "name": os.environ["SERVER_NAME"],
+                "cpu_type": os.environ["SERVER_CPU_TYPE"],
+                "ssh_host": os.environ["SERVER_SSH_HOST"],
+                "ipv4": None,
+                "ipv6": None,
+                "status": "failed"
+            }
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False, indent=2)
+                fh.write("\n")
+            PY
+          fi
+
+      - name: Upload collected result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: collected/${{ matrix.result_file }}
+          if-no-files-found: error
+
+  aggregate:
+    needs:
+      - prepare
+      - collect
+    if: ${{ always() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Download collected results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: collected-*
+          path: collected-results
+          merge-multiple: true
+
+      - name: Run aggregate sync
         env:
           HOSTS_CONFIG_URL: ${{ secrets.HOSTS_CONFIG_URL }}
           EXTRA_HOSTS_CONFIG_URL: ${{ secrets.EXTRA_HOSTS_CONFIG_URL }}
           CF_555606_XYZ_MAIN_API_KEY: ${{ secrets.CF_555606_XYZ_MAIN_API_KEY }}
           XINJIAPO_555606_XYZ_MAIN_API_KEY: ${{ secrets.XINJIAPO_555606_XYZ_MAIN_API_KEY }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          AMD64_SSH_USERNAME: ${{ secrets.AMD64_SSH_USERNAME }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_RULESET_ID: ${{ secrets.CLOUDFLARE_RULESET_ID }}
+          CLOUDFLARE_RULE_ID: ${{ secrets.CLOUDFLARE_RULE_ID }}
+          CLOUDFLARE_RULE_DESCRIPTION: ${{ secrets.CLOUDFLARE_RULE_DESCRIPTION }}
+          CLOUDFLARE_RULE_EXPRESSION_TEMPLATE: ${{ secrets.CLOUDFLARE_RULE_EXPRESSION_TEMPLATE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python sync_monitors.py
+        run: |
+          python sync_monitors.py aggregate --results-dir collected-results
