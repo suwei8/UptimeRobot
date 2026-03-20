@@ -31,36 +31,45 @@ def load_local_env_file(env_path=".env"):
 
 load_local_env_file()
 
+def get_env(name, default=None):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if stripped == "":
+        return default
+    return stripped
+
 # Configuration
-CONFIG_URL = os.getenv("HOSTS_CONFIG_URL")
-EXTRA_CONFIG_URL = os.getenv("EXTRA_HOSTS_CONFIG_URL")
+CONFIG_URL = get_env("HOSTS_CONFIG_URL")
+EXTRA_CONFIG_URL = get_env("EXTRA_HOSTS_CONFIG_URL")
 
 API_KEYS = {
-    "arm64": os.getenv("CF_555606_XYZ_MAIN_API_KEY"),
-    "amd64": os.getenv("XINJIAPO_555606_XYZ_MAIN_API_KEY")
+    "arm64": get_env("CF_555606_XYZ_MAIN_API_KEY"),
+    "amd64": get_env("XINJIAPO_555606_XYZ_MAIN_API_KEY")
 }
 
 SSH_USERS = {
-    "arm64": os.getenv("SSH_USERNAME"),
-    "amd64": os.getenv("AMD64_SSH_USERNAME")
+    "arm64": get_env("SSH_USERNAME"),
+    "amd64": get_env("AMD64_SSH_USERNAME")
 }
-SSH_PASS = os.getenv("SSH_PASSWORD")
+SSH_PASS = get_env("SSH_PASSWORD")
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = get_env("TELEGRAM_CHAT_ID")
 
-CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
-CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID") or os.getenv("CF_ACCOUNT_ID")
-CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID") or os.getenv("CF_ZONE_ID")
-CLOUDFLARE_API_EMAIL = os.getenv("CF_API_EMAIL")
-CLOUDFLARE_API_KEY = os.getenv("CF_API_KEY")
-CLOUDFLARE_RULESET_ID = os.getenv("CLOUDFLARE_RULESET_ID")
-CLOUDFLARE_RULE_ID = os.getenv("CLOUDFLARE_RULE_ID")
-CLOUDFLARE_RULE_DESCRIPTION = os.getenv(
+CLOUDFLARE_API_TOKEN = get_env("CLOUDFLARE_API_TOKEN")
+CLOUDFLARE_ACCOUNT_ID = get_env("CLOUDFLARE_ACCOUNT_ID") or get_env("CF_ACCOUNT_ID")
+CLOUDFLARE_ZONE_ID = get_env("CLOUDFLARE_ZONE_ID") or get_env("CF_ZONE_ID")
+CLOUDFLARE_API_EMAIL = get_env("CF_API_EMAIL")
+CLOUDFLARE_API_KEY = get_env("CF_API_KEY")
+CLOUDFLARE_RULESET_ID = get_env("CLOUDFLARE_RULESET_ID")
+CLOUDFLARE_RULE_ID = get_env("CLOUDFLARE_RULE_ID")
+CLOUDFLARE_RULE_DESCRIPTION = get_env(
     "CLOUDFLARE_RULE_DESCRIPTION",
     "Allow Only Server IP List to batam2-ai"
 )
-CLOUDFLARE_RULE_EXPRESSION_TEMPLATE = os.getenv("CLOUDFLARE_RULE_EXPRESSION_TEMPLATE")
+CLOUDFLARE_RULE_EXPRESSION_TEMPLATE = get_env("CLOUDFLARE_RULE_EXPRESSION_TEMPLATE")
 
 # API V3 configuration
 API_BASE = "https://api.uptimerobot.com/v3"
