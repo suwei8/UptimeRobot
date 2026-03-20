@@ -106,24 +106,7 @@ jobs:
             --cpu-type "$SERVER_CPU_TYPE" \
             --ssh-host "$SERVER_SSH_HOST" \
             --output "$RESULT_PATH"; then
-            python - <<'PY'
-            import json
-            import os
-
-            path = os.environ["RESULT_PATH"]
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            payload = {
-                "name": os.environ["SERVER_NAME"],
-                "cpu_type": os.environ["SERVER_CPU_TYPE"],
-                "ssh_host": os.environ["SERVER_SSH_HOST"],
-                "ipv4": None,
-                "ipv6": None,
-                "status": "failed"
-            }
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2)
-                fh.write("\n")
-            PY
+            python -c 'import json, os; path = os.environ["RESULT_PATH"]; os.makedirs(os.path.dirname(path), exist_ok=True); payload = {"name": os.environ["SERVER_NAME"], "cpu_type": os.environ["SERVER_CPU_TYPE"], "ssh_host": os.environ["SERVER_SSH_HOST"], "ipv4": None, "ipv6": None, "status": "failed"}; open(path, "w", encoding="utf-8").write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")'
           fi
 
       - name: Upload collected result
