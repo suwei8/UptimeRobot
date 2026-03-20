@@ -441,39 +441,66 @@ def cloudflare_is_configured():
     has_auth = bool(CLOUDFLARE_API_TOKEN or (CLOUDFLARE_API_EMAIL and CLOUDFLARE_API_KEY))
     return bool(has_auth and scope_type and scope_id)
 
-def cloudflare_headers():
+def cloudflare_auth_header_sets():
+    header_sets = []
     headers = {"Content-Type": "application/json"}
     if CLOUDFLARE_API_TOKEN:
-        headers["Authorization"] = f"Bearer {CLOUDFLARE_API_TOKEN}"
-        return headers
+        token_headers = dict(headers)
+        token_headers["Authorization"] = f"Bearer {CLOUDFLARE_API_TOKEN}"
+        header_sets.append(("api_token", token_headers))
     if CLOUDFLARE_API_EMAIL and CLOUDFLARE_API_KEY:
-        headers["X-Auth-Email"] = CLOUDFLARE_API_EMAIL
-        headers["X-Auth-Key"] = CLOUDFLARE_API_KEY
-        return headers
-    raise RuntimeError("Cloudflare credentials are not configured.")
+        key_headers = dict(headers)
+        key_headers["X-Auth-Email"] = CLOUDFLARE_API_EMAIL
+        key_headers["X-Auth-Key"] = CLOUDFLARE_API_KEY
+        header_sets.append(("global_key", key_headers))
+    if not header_sets:
+        raise RuntimeError("Cloudflare credentials are not configured.")
+    return header_sets
 
 def cloudflare_request(method, path, payload=None):
     url = f"https://api.cloudflare.com/client/v4{path}"
-    response = requests.request(
-        method,
-        url,
-        headers=cloudflare_headers(),
-        json=payload,
-        timeout=30
-    )
+    auth_attempt_errors = []
 
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise RuntimeError(f"Cloudflare API returned non-JSON response: HTTP {response.status_code}") from exc
-
-    if not response.ok or not data.get("success", False):
-        raise RuntimeError(
-            f"Cloudflare API error on {method} {path}: HTTP {response.status_code} | "
-            f"errors={json.dumps(data.get('errors', []), ensure_ascii=False)}"
+    for auth_label, headers in cloudflare_auth_header_sets():
+        response = requests.request(
+            method,
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30
         )
 
-    return data.get("result")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Cloudflare API returned non-JSON response: HTTP {response.status_code}") from exc
+
+        if response.ok and data.get("success", False):
+            if auth_label != "api_token":
+                print(f"Cloudflare request {method} {path} succeeded using {auth_label} authentication.")
+            return data.get("result")
+
+        errors = data.get("errors", [])
+        auth_attempt_errors.append((auth_label, response.status_code, errors))
+
+        auth_error = response.status_code in (401, 403) and any(err.get("code") == 10000 for err in errors)
+        if auth_error:
+            print(f"Cloudflare {auth_label} authentication failed for {method} {path}. Trying next credential set.")
+            continue
+
+        raise RuntimeError(
+            f"Cloudflare API error on {method} {path}: HTTP {response.status_code} | "
+            f"errors={json.dumps(errors, ensure_ascii=False)}"
+        )
+
+    formatted_errors = "; ".join(
+        f"{label}: HTTP {status} errors={json.dumps(errors, ensure_ascii=False)}"
+        for label, status, errors in auth_attempt_errors
+    )
+    raise RuntimeError(
+        f"Cloudflare API authentication failed for {method} {path} using all configured credential sets. "
+        f"Attempts: {formatted_errors}"
+    )
 
 def find_cloudflare_target_rule(rules):
     if CLOUDFLARE_RULE_ID:
