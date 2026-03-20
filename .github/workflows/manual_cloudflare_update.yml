@@ -1,0 +1,59 @@
+name: Manual Cloudflare ARM64 IP Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm64_reports_json:
+        description: JSON array of ARM64 report rows with name/ipv4/ipv6
+        required: true
+        type: string
+
+jobs:
+  update-cloudflare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Write manual ARM64 reports
+        env:
+          ARM64_REPORTS_JSON: ${{ inputs.arm64_reports_json }}
+        run: |
+          mkdir -p manual-input
+          python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["ARM64_REPORTS_JSON"])
+          if not isinstance(payload, list):
+              raise SystemExit("arm64_reports_json must be a JSON array")
+
+          with open("manual-input/arm64_reports.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, ensure_ascii=False, indent=2)
+              fh.write("\n")
+          PY
+
+      - name: Update Cloudflare rule
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_RULESET_ID: ${{ secrets.CLOUDFLARE_RULESET_ID }}
+          CLOUDFLARE_RULE_ID: ${{ secrets.CLOUDFLARE_RULE_ID }}
+          CLOUDFLARE_RULE_DESCRIPTION: ${{ secrets.CLOUDFLARE_RULE_DESCRIPTION }}
+          CLOUDFLARE_RULE_EXPRESSION_TEMPLATE: ${{ secrets.CLOUDFLARE_RULE_EXPRESSION_TEMPLATE }}
+        run: |
+          python sync_monitors.py manual-cloudflare --input manual-input/arm64_reports.json

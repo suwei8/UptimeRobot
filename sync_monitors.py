@@ -50,8 +50,10 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
-CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
-CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID")
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID") or os.getenv("CF_ACCOUNT_ID")
+CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID") or os.getenv("CF_ZONE_ID")
+CLOUDFLARE_API_EMAIL = os.getenv("CF_API_EMAIL")
+CLOUDFLARE_API_KEY = os.getenv("CF_API_KEY")
 CLOUDFLARE_RULESET_ID = os.getenv("CLOUDFLARE_RULESET_ID")
 CLOUDFLARE_RULE_ID = os.getenv("CLOUDFLARE_RULE_ID")
 CLOUDFLARE_RULE_DESCRIPTION = os.getenv(
@@ -436,13 +438,19 @@ def get_cloudflare_scope():
 
 def cloudflare_is_configured():
     scope_type, scope_id = get_cloudflare_scope()
-    return bool(CLOUDFLARE_API_TOKEN and CLOUDFLARE_RULESET_ID and scope_type and scope_id)
+    has_auth = bool(CLOUDFLARE_API_TOKEN or (CLOUDFLARE_API_EMAIL and CLOUDFLARE_API_KEY))
+    return bool(has_auth and scope_type and scope_id)
 
 def cloudflare_headers():
-    return {
-        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Content-Type": "application/json"}
+    if CLOUDFLARE_API_TOKEN:
+        headers["Authorization"] = f"Bearer {CLOUDFLARE_API_TOKEN}"
+        return headers
+    if CLOUDFLARE_API_EMAIL and CLOUDFLARE_API_KEY:
+        headers["X-Auth-Email"] = CLOUDFLARE_API_EMAIL
+        headers["X-Auth-Key"] = CLOUDFLARE_API_KEY
+        return headers
+    raise RuntimeError("Cloudflare credentials are not configured.")
 
 def cloudflare_request(method, path, payload=None):
     url = f"https://api.cloudflare.com/client/v4{path}"
@@ -486,6 +494,52 @@ def find_cloudflare_target_rule(rules):
             "Set CLOUDFLARE_RULE_ID to disambiguate."
         )
     return matches[0]
+
+def get_cloudflare_ruleset(scope_type, scope_id, ruleset_id):
+    return cloudflare_request("GET", f"/{scope_type}/{scope_id}/rulesets/{ruleset_id}")
+
+def get_cloudflare_entrypoint_ruleset(scope_type, scope_id):
+    if CLOUDFLARE_RULESET_ID:
+        return get_cloudflare_ruleset(scope_type, scope_id, CLOUDFLARE_RULESET_ID)
+    return cloudflare_request(
+        "GET",
+        f"/{scope_type}/{scope_id}/rulesets/phases/http_request_firewall_custom/entrypoint"
+    )
+
+def resolve_cloudflare_target_rule(scope_type, scope_id):
+    candidate_rulesets = []
+    seen_ruleset_ids = set()
+
+    def add_candidate(ruleset):
+        ruleset_id = ruleset.get("id")
+        if ruleset_id and ruleset_id not in seen_ruleset_ids:
+            seen_ruleset_ids.add(ruleset_id)
+            candidate_rulesets.append(ruleset)
+
+    entrypoint_ruleset = get_cloudflare_entrypoint_ruleset(scope_type, scope_id)
+    add_candidate(entrypoint_ruleset)
+
+    for rule in entrypoint_ruleset.get("rules", []):
+        if rule.get("action") != "execute":
+            continue
+        child_ruleset_id = rule.get("action_parameters", {}).get("id")
+        if not child_ruleset_id or child_ruleset_id in seen_ruleset_ids:
+            continue
+        try:
+            add_candidate(get_cloudflare_ruleset(scope_type, scope_id, child_ruleset_id))
+        except RuntimeError as exc:
+            print(f"Warning: failed to inspect executed Cloudflare ruleset {child_ruleset_id}: {exc}")
+
+    last_error = None
+    for ruleset in candidate_rulesets:
+        try:
+            return ruleset, find_cloudflare_target_rule(ruleset.get("rules", []))
+        except RuntimeError as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Cloudflare target rule could not be resolved from any candidate ruleset.")
 
 def sort_ip_key(ip_value):
     parsed = ipaddress.ip_address(ip_value)
@@ -545,9 +599,7 @@ def update_cloudflare_server_ip_rule(collected_ips):
 
     scope_type, scope_id = get_cloudflare_scope()
     ip_set_literal = build_cloudflare_ip_set(collected_ips)
-    ruleset_path = f"/{scope_type}/{scope_id}/rulesets/{CLOUDFLARE_RULESET_ID}"
-    ruleset = cloudflare_request("GET", ruleset_path)
-    target_rule = find_cloudflare_target_rule(ruleset.get("rules", []))
+    ruleset, target_rule = resolve_cloudflare_target_rule(scope_type, scope_id)
 
     current_expression = target_rule.get("expression", "")
     new_expression = replace_ip_src_set(current_expression, ip_set_literal)
@@ -557,12 +609,32 @@ def update_cloudflare_server_ip_rule(collected_ips):
         return
 
     payload = build_cloudflare_rule_payload(target_rule, new_expression)
+    ruleset_path = f"/{scope_type}/{scope_id}/rulesets/{ruleset['id']}"
     update_path = f"{ruleset_path}/rules/{target_rule['id']}"
     cloudflare_request("PATCH", update_path, payload)
     print(
         f"Updated Cloudflare rule '{target_rule.get('description') or target_rule.get('id')}' "
         f"with {len(set(collected_ips))} collected server IPs."
     )
+
+def load_reports_file(path):
+    with open(path, "r", encoding="utf-8") as input_file:
+        payload = json.load(input_file)
+    if not isinstance(payload, list):
+        raise RuntimeError(f"Expected a JSON array in {path}.")
+    return payload
+
+def collect_arm64_ips_from_reports(reports):
+    collected_ips = set()
+    for report in reports:
+        if report.get("cpu_type", "arm64") != "arm64":
+            continue
+        for field in ("ipv4", "ipv6"):
+            value = report.get(field)
+            if not value or str(value).upper() == "N/A":
+                continue
+            collected_ips.add(str(ipaddress.ip_address(value)))
+    return collected_ips
 
 def synchronize_with_results(servers, collected_results):
     require_uptimerobot_api_keys()
@@ -786,6 +858,13 @@ def run_aggregate_mode(args):
     print(f"Loaded {len(collected_results)} collected server result(s) from {args.results_dir}.")
     synchronize_with_results(servers, collected_results)
 
+def run_manual_cloudflare_mode(args):
+    reports = load_reports_file(args.input)
+    collected_ips = collect_arm64_ips_from_reports(reports)
+    print(f"Loaded {len(reports)} ARM64 report row(s) from {args.input}.")
+    print(f"Collected {len(collected_ips)} unique ARM64 IP(s) for Cloudflare update.")
+    update_cloudflare_server_ip_rule(collected_ips)
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Sync UptimeRobot monitors and server IP allowlists.")
     subparsers = parser.add_subparsers(dest="command")
@@ -799,6 +878,12 @@ def build_arg_parser():
     aggregate_parser = subparsers.add_parser("aggregate", help="Aggregate collected results and update services.")
     aggregate_parser.add_argument("--results-dir", required=True, help="Directory containing collected JSON result files.")
 
+    manual_cf_parser = subparsers.add_parser(
+        "manual-cloudflare",
+        help="Update the Cloudflare server-IP rule from a JSON report file."
+    )
+    manual_cf_parser.add_argument("--input", required=True, help="JSON file containing ARM64 report rows.")
+
     return parser
 
 def main():
@@ -811,6 +896,10 @@ def main():
 
     if args.command == "aggregate":
         run_aggregate_mode(args)
+        return
+
+    if args.command == "manual-cloudflare":
+        run_manual_cloudflare_mode(args)
         return
 
     run_full_sync()

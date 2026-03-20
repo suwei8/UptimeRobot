@@ -149,6 +149,10 @@ jobs:
           EXTRA_HOSTS_CONFIG_URL: ${{ secrets.EXTRA_HOSTS_CONFIG_URL }}
           CF_555606_XYZ_MAIN_API_KEY: ${{ secrets.CF_555606_XYZ_MAIN_API_KEY }}
           XINJIAPO_555606_XYZ_MAIN_API_KEY: ${{ secrets.XINJIAPO_555606_XYZ_MAIN_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
