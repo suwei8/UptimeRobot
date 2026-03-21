@@ -2,3 +2,4 @@
 # These entries are merged with collected ARM64 IPv4/IPv6 addresses.
 
 39.128.161.0/24
+2409:8a6c:3711:2fa0::/64
