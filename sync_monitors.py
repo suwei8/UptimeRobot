@@ -70,6 +70,10 @@ CLOUDFLARE_RULE_DESCRIPTION = get_env(
     "Allow Only Server IP List to batam2-ai"
 )
 CLOUDFLARE_RULE_EXPRESSION_TEMPLATE = get_env("CLOUDFLARE_RULE_EXPRESSION_TEMPLATE")
+CLOUDFLARE_EXTRA_ALLOWLIST_FILE = get_env(
+    "CLOUDFLARE_EXTRA_ALLOWLIST_FILE",
+    "cloudflare_extra_allowlist.txt"
+)
 
 # API V3 configuration
 API_BASE = "https://api.uptimerobot.com/v3"
@@ -578,8 +582,36 @@ def resolve_cloudflare_target_rule(scope_type, scope_id):
     raise RuntimeError("Cloudflare target rule could not be resolved from any candidate ruleset.")
 
 def sort_ip_key(ip_value):
+    if "/" in ip_value:
+        parsed = ipaddress.ip_network(ip_value, strict=False)
+        return (parsed.version, int(parsed.network_address), parsed.prefixlen, 1)
     parsed = ipaddress.ip_address(ip_value)
-    return (parsed.version, int(parsed))
+    return (parsed.version, int(parsed), 128 if parsed.version == 6 else 32, 0)
+
+def normalize_cloudflare_ip_entry(raw_value):
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    try:
+        if "/" in value:
+            return str(ipaddress.ip_network(value, strict=False))
+        return str(ipaddress.ip_address(value))
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid Cloudflare allowlist entry: {value}") from exc
+
+def load_cloudflare_extra_allowlist():
+    if not CLOUDFLARE_EXTRA_ALLOWLIST_FILE or not os.path.exists(CLOUDFLARE_EXTRA_ALLOWLIST_FILE):
+        return set()
+
+    entries = set()
+    with open(CLOUDFLARE_EXTRA_ALLOWLIST_FILE, "r", encoding="utf-8") as allowlist_file:
+        for raw_line in allowlist_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            entries.add(normalize_cloudflare_ip_entry(line))
+
+    return entries
 
 def build_cloudflare_ip_set(ip_values):
     unique_ips = sorted(set(ip_values), key=sort_ip_key)
@@ -634,6 +666,13 @@ def update_cloudflare_server_ip_rule(collected_ips):
         return
 
     scope_type, scope_id = get_cloudflare_scope()
+    extra_allowlist = load_cloudflare_extra_allowlist()
+    if extra_allowlist:
+        print(
+            f"Loaded {len(extra_allowlist)} extra Cloudflare allowlist entr"
+            f"{'y' if len(extra_allowlist) == 1 else 'ies'} from {CLOUDFLARE_EXTRA_ALLOWLIST_FILE}."
+        )
+    collected_ips = set(collected_ips) | extra_allowlist
     ip_set_literal = build_cloudflare_ip_set(collected_ips)
     ruleset, target_rule = resolve_cloudflare_target_rule(scope_type, scope_id)
 

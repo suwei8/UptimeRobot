@@ -21,6 +21,7 @@
 - [`sync_monitors.py`](/home/sw/dev_root/UptimeRobot/sync_monitors.py)：主同步脚本
 - [`.github/workflows/sync_monitors.yml`](/home/sw/dev_root/UptimeRobot/.github/workflows/sync_monitors.yml)：GitHub Actions 工作流
 - [`bin/cloudflared-linux-amd64`](/home/sw/dev_root/UptimeRobot/bin/cloudflared-linux-amd64)：通过 Cloudflare Access 进行 SSH 代理时使用的二进制文件
+- [`cloudflare_extra_allowlist.txt`](/home/sw/dev_root/UptimeRobot/cloudflare_extra_allowlist.txt)：需要长期保留在 Cloudflare 规则中的额外 IP / CIDR 白名单
 
 ## 运行流程
 
@@ -85,6 +86,7 @@
 说明：
 
 - 只有 ARM64 服务器的 `IPv4` 和 `IPv6` 会写入 Cloudflare 安全规则。
+- 如果需要长期保留额外的静态来源 IP 或网段，可写入 [`cloudflare_extra_allowlist.txt`](/home/sw/dev_root/UptimeRobot/cloudflare_extra_allowlist.txt)，脚本会在每次更新 Cloudflare 规则时一并合并。
 - 如果没有设置 `CLOUDFLARE_RULE_ID`，脚本会按 `CLOUDFLARE_RULE_DESCRIPTION` 查找目标规则。
 - 如果现有规则表达式里并不包含 `ip.src in { ... }` 这种内联 IP 集合，需要提供 `CLOUDFLARE_RULE_EXPRESSION_TEMPLATE`，并使用占位符 `__IP_SET__`。
 

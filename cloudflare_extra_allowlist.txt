@@ -1,0 +1,4 @@
+# Persistent extra Cloudflare allowlist entries.
+# These entries are merged with collected ARM64 IPv4/IPv6 addresses.
+
+39.128.161.0/24
