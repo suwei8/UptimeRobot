@@ -351,8 +351,8 @@ def parse_ip_value(value, version):
     return str(parsed)
 
 def get_public_ips(ssh_host, cpu_type, server_name=None):
-    # Special case: US-GCP俄勒冈 uses ARM64 SSH username despite being amd64
-    if server_name == "US-GCP俄勒冈":
+    # Special case: these GCP Oregon hosts use the ARM64 SSH username despite being amd64.
+    if server_name in {"US-GCP俄勒冈", "US-GCP俄勒冈2"}:
         ssh_user = SSH_USERS.get("arm64")
     else:
         ssh_user = SSH_USERS.get(cpu_type)
