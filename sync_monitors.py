@@ -49,6 +49,16 @@ API_KEYS = {
     "amd64": get_env("XINJIAPO_555606_XYZ_MAIN_API_KEY")
 }
 
+STATUS_PAGE_IDS = {
+    "arm64": get_env("CF_555606_XYZ_STATUS_PAGE_ID"),
+    "amd64": get_env("XINJIAPO_555606_XYZ_STATUS_PAGE_ID")
+}
+
+STATUS_PAGE_URL_KEYS = {
+    "arm64": get_env("CF_555606_XYZ_STATUS_PAGE_URL_KEY"),
+    "amd64": get_env("XINJIAPO_555606_XYZ_STATUS_PAGE_URL_KEY")
+}
+
 SSH_USERS = {
     "arm64": get_env("SSH_USERNAME"),
     "amd64": get_env("AMD64_SSH_USERNAME")
@@ -96,6 +106,110 @@ def get_alert_contact_id(api_key):
     except Exception as e:
         print(f"Failed to get alert contacts: {e}")
     return None
+
+def get_status_pages(api_key):
+    try:
+        resp = requests.post(
+            f"{V2_BASE}/getPSPs",
+            data={"api_key": api_key, "format": "json"},
+            timeout=20
+        )
+        data = resp.json()
+        if data.get("stat") == "ok":
+            return data.get("psps", [])
+        print(f"API Error (Get PSPs): {data}")
+    except Exception as e:
+        print(f"Failed to fetch status pages: {e}")
+    return []
+
+def select_status_page(psps, account):
+    if not psps:
+        return None
+
+    target_id = STATUS_PAGE_IDS.get(account)
+    if target_id:
+        for psp in psps:
+            if str(psp.get("id")) == str(target_id):
+                return psp
+        print(f"Configured status page ID {target_id} not found for {account}.")
+        return None
+
+    target_url_key = STATUS_PAGE_URL_KEYS.get(account)
+    if target_url_key:
+        target_url_key = target_url_key.strip().strip("/")
+        for psp in psps:
+            standard_url = (psp.get("standard_url") or "").rstrip("/")
+            if standard_url.endswith(f"/{target_url_key}"):
+                return psp
+        print(f"Configured status page URL key {target_url_key} not found for {account}.")
+        return None
+
+    if len(psps) == 1:
+        return psps[0]
+
+    if account == "amd64":
+        id_var = "XINJIAPO_555606_XYZ_STATUS_PAGE_ID"
+        key_var = "XINJIAPO_555606_XYZ_STATUS_PAGE_URL_KEY"
+    else:
+        id_var = "CF_555606_XYZ_STATUS_PAGE_ID"
+        key_var = "CF_555606_XYZ_STATUS_PAGE_URL_KEY"
+
+    print(
+        f"Multiple status pages found for {account}; set "
+        f"{id_var} or {key_var} to choose one."
+    )
+    return None
+
+def sync_status_page_monitors(api_key, monitors_by_name, account):
+    psps = get_status_pages(api_key)
+    psp = select_status_page(psps, account)
+    if not psp:
+        print(f"No status page selected for {account}. Skipping status page sync.")
+        return
+
+    desired_ids = sorted(int(m["id"]) for m in monitors_by_name.values())
+    current_ids = sorted(int(monitor_id) for monitor_id in psp.get("monitors", []))
+
+    if desired_ids == current_ids:
+        print(
+            f"Status page {psp.get('friendly_name')} already contains "
+            f"{len(desired_ids)} monitor(s)."
+        )
+        return
+
+    to_add = sorted(set(desired_ids) - set(current_ids))
+    to_remove = sorted(set(current_ids) - set(desired_ids))
+
+    print(
+        f"Updating status page {psp.get('friendly_name')} "
+        f"({len(current_ids)} -> {len(desired_ids)} monitor(s))."
+    )
+    if to_add:
+        print(f"  Adding monitor IDs: {to_add}")
+    if to_remove:
+        print(f"  Removing monitor IDs: {to_remove}")
+
+    payload = {
+        "api_key": api_key,
+        "format": "json",
+        "id": psp["id"],
+        "friendly_name": psp["friendly_name"],
+        "monitors": "-".join(str(monitor_id) for monitor_id in desired_ids)
+    }
+    if psp.get("sort") is not None:
+        payload["sort"] = psp["sort"]
+    if psp.get("status") is not None:
+        payload["status"] = psp["status"]
+
+    try:
+        resp = requests.post(f"{V2_BASE}/editPSP", data=payload, timeout=20)
+        data = resp.json()
+        if data.get("stat") == "ok":
+            print(f"[STATUS PAGE UPDATED] {psp.get('friendly_name')}")
+        else:
+            print(f"[STATUS PAGE UPDATE FAIL] {data}")
+    except Exception as e:
+        print(f"[STATUS PAGE UPDATE ERROR] {e}")
 
 # Country flag emoji mapping based on server name prefix
 COUNTRY_FLAGS = {
@@ -865,6 +979,11 @@ def synchronize_with_results(servers, collected_results):
                 print(f"Extra monitor {name} does not exist. Creating...")
                 create_monitor_typed(api_key, name, url, monitor_type, 600, alert_contacts.get(account))
                 time.sleep(2)
+
+    # Refresh AMD64 monitors after all monitor changes so the public status page stays in sync.
+    print("\n=== Synchronizing AMD64 Status Page ===")
+    amd64_monitors = get_current_monitors(API_KEYS["amd64"])
+    sync_status_page_monitors(API_KEYS["amd64"], amd64_monitors, "amd64")
 
     # 5. Update Cloudflare allowlist rule with collected ARM64 server IPs only
     print("\n=== Updating Cloudflare Security Rule ===")

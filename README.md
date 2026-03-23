@@ -41,8 +41,11 @@
 
 - `CF_555606_XYZ_MAIN_API_KEY`
 - `XINJIAPO_555606_XYZ_MAIN_API_KEY`
+- `CF_555606_XYZ_STATUS_PAGE_ID` / `CF_555606_XYZ_STATUS_PAGE_URL_KEY`（可选）
+- `XINJIAPO_555606_XYZ_STATUS_PAGE_ID` / `XINJIAPO_555606_XYZ_STATUS_PAGE_URL_KEY`（可选）
 
 这两个是 UptimeRobot API Key，不是 Cloudflare Token。
+如果某个账号下有多个状态页，可通过上面的可选变量指定脚本应同步哪一个状态页；若账号下只有一个状态页，脚本会自动使用它。
 
 ### 主机配置
 
