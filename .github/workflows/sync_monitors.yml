@@ -4,6 +4,16 @@ on:
   schedule:
     - cron: '0 2 * * *' # Daily at 10:00 CST (02:00 UTC)
   workflow_dispatch:
+    inputs:
+      cpu_type_filter:
+        description: 'Filter servers by CPU type (amd64, arm64, or all)'
+        required: false
+        type: choice
+        options:
+          - all
+          - amd64
+          - arm64
+        default: all
 
 jobs:
   prepare:
@@ -25,6 +35,7 @@ jobs:
         id: matrix
         env:
           HOSTS_CONFIG_URL: ${{ secrets.HOSTS_CONFIG_URL }}
+          CPU_TYPE_FILTER: ${{ github.event.inputs.cpu_type_filter || 'all' }}
         run: |
           python - <<'PY'
           import json
@@ -37,6 +48,8 @@ jobs:
           response.raise_for_status()
           servers = response.json()
 
+          cpu_type_filter = os.environ.get("CPU_TYPE_FILTER", "all")
+
           matrix = []
           for index, server in enumerate(servers, start=1):
               name = server.get("name")
@@ -45,6 +58,11 @@ jobs:
                   continue
 
               cpu_type = server.get("cpu_type", "amd64")
+              
+              # Apply CPU type filter if specified
+              if cpu_type_filter != "all" and cpu_type != cpu_type_filter:
+                  continue
+
               slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-").lower() or f"server-{index}"
               matrix.append({
                   "index": index,
