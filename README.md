@@ -13,7 +13,9 @@
 - 当服务器 `IPv4` 变化时创建或更新监控
 - 自动绑定每个 UptimeRobot 账号的第一个告警联系人
 - 采集 ARM64 服务器公网 `IPv4` 和 `IPv6`
+- 采集 AMD64 服务器公网 `IPv4` 和 `IPv6`
 - 发送 Telegram 消息 `ARM64 服务器 IP 清单`
+- 发送 Telegram 消息 `AMD64 服务器 IP 清单`
 - 仅将 ARM64 服务器 IP 更新到 Cloudflare 规则 `Allow Only Server IP List to batam2-ai`
 
 ## 仓库结构
@@ -137,7 +139,7 @@ python3 sync_monitors.py
 ## 当前行为
 
 - UptimeRobot 监控仍然会同时同步 `arm64` 和 `amd64`
-- Telegram 报告仅发送 `arm64`
+- Telegram 报告同时发送 `arm64` 和 `amd64` IP 清单
 - Cloudflare 白名单仅更新 `arm64`
 - UptimeRobot 监控 URL 仍然只使用 `IPv4`
 - GitHub Actions 会按顺序逐台采集服务器 IP，不会并发批量 SSH 登录

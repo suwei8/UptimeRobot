@@ -227,16 +227,20 @@ def get_country_flag(name):
 def format_telegram_ip(ip_value):
     return ip_value if ip_value else "N/A"
 
-def send_telegram_ip_report(arm64_reports):
+def send_telegram_ip_report(reports, cpu_label="ARM64"):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram credentials not set. Skipping IP report.")
+        print(f"Telegram credentials not set. Skipping {cpu_label} IP report.")
+        return
+
+    if not reports:
+        print(f"No {cpu_label} servers to report. Skipping Telegram message.")
         return
 
     cst = timezone(timedelta(hours=8))
     now_str = datetime.now(cst).strftime("%Y-%m-%d %H:%M CST")
 
-    lines = ["📡 <b>ARM64 服务器 IP 清单</b>", "━━━━━━━━━━━━━━━━"]
-    for report in arm64_reports:
+    lines = [f"📡 <b>{cpu_label} 服务器 IP 清单</b>", "━━━━━━━━━━━━━━━━"]
+    for report in reports:
         flag = get_country_flag(report["name"])
         lines.append(f"{flag} <code>{report['name']}</code>")
         lines.append(f"IPv4 → <code>{format_telegram_ip(report['ipv4'])}</code>")
@@ -245,7 +249,7 @@ def send_telegram_ip_report(arm64_reports):
 
     lines.append("━━━━━━━━━━━━━━━━")
 
-    failed_reports = [report for report in arm64_reports if not report["ipv4"] and not report["ipv6"]]
+    failed_reports = [report for report in reports if not report["ipv4"] and not report["ipv6"]]
     if failed_reports:
         lines.append("")
         lines.append("❌ <b>获取失败:</b>")
@@ -253,11 +257,11 @@ def send_telegram_ip_report(arm64_reports):
             flag = get_country_flag(report["name"])
             lines.append(f"{flag} <code>{report['name']}</code> → IPv4 / IPv6 均获取失败")
 
-    ipv4_count = sum(1 for report in arm64_reports if report["ipv4"])
-    ipv6_count = sum(1 for report in arm64_reports if report["ipv6"])
+    ipv4_count = sum(1 for report in reports if report["ipv4"])
+    ipv6_count = sum(1 for report in reports if report["ipv6"])
     lines.append("")
     lines.append(
-        f"✅ 共 {len(arm64_reports)} 台 | IPv4 {ipv4_count} 台 | IPv6 {ipv6_count} 台 | ❌ {len(failed_reports)} 台完全失败"
+        f"✅ 共 {len(reports)} 台 | IPv4 {ipv4_count} 台 | IPv6 {ipv6_count} 台 | ❌ {len(failed_reports)} 台完全失败"
     )
     lines.append(f"⏰ {now_str}")
 
@@ -272,7 +276,7 @@ def send_telegram_ip_report(arm64_reports):
         }
         resp = requests.post(url, json=payload, timeout=15)
         if resp.status_code == 200:
-            print("\n[TELEGRAM] IP report sent successfully.")
+            print(f"\n[TELEGRAM] {cpu_label} IP report sent successfully.")
         else:
             print(f"\n[TELEGRAM FAIL] HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
@@ -876,6 +880,7 @@ def synchronize_with_results(servers, collected_results):
     # 3. Synchronize actual servers
     update_failures = 0
     arm64_reports = []
+    amd64_reports = []
     collected_server_ips = set()
     print("\n=== Synchronizing Server IPs From Collected Results ===")
     for server in servers:
@@ -919,6 +924,12 @@ def synchronize_with_results(servers, collected_results):
 
         if cpu_type == "arm64":
             arm64_reports.append({
+                "name": name,
+                "ipv4": public_ipv4,
+                "ipv6": public_ipv6
+            })
+        else:
+            amd64_reports.append({
                 "name": name,
                 "ipv4": public_ipv4,
                 "ipv6": public_ipv6
@@ -991,7 +1002,11 @@ def synchronize_with_results(servers, collected_results):
 
     # 6. Send ARM64 IP report to Telegram
     print("\n=== Sending ARM64 IP Report to Telegram ===")
-    send_telegram_ip_report(arm64_reports)
+    send_telegram_ip_report(arm64_reports, cpu_label="ARM64")
+
+    # 7. Send AMD64 IP report to Telegram
+    print("\n=== Sending AMD64 IP Report to Telegram ===")
+    send_telegram_ip_report(amd64_reports, cpu_label="AMD64")
 
     if update_failures > 0:
         print(f"\n⚠ {update_failures} monitor(s) failed to update!")
