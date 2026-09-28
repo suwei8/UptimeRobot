@@ -1000,14 +1000,6 @@ def synchronize_with_results(servers, collected_results):
     print("\n=== Updating Cloudflare Security Rule ===")
     update_cloudflare_server_ip_rule(collected_server_ips)
 
-    # 6. Send ARM64 IP report to Telegram
-    print("\n=== Sending ARM64 IP Report to Telegram ===")
-    send_telegram_ip_report(arm64_reports, cpu_label="ARM64")
-
-    # 7. Send AMD64 IP report to Telegram
-    print("\n=== Sending AMD64 IP Report to Telegram ===")
-    send_telegram_ip_report(amd64_reports, cpu_label="AMD64")
-
     if update_failures > 0:
         print(f"\n⚠ {update_failures} monitor(s) failed to update!")
         exit(1)

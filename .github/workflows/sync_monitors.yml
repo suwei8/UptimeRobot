@@ -178,7 +178,5 @@ jobs:
           CLOUDFLARE_RULE_ID: ${{ secrets.CLOUDFLARE_RULE_ID }}
           CLOUDFLARE_RULE_DESCRIPTION: ${{ secrets.CLOUDFLARE_RULE_DESCRIPTION }}
           CLOUDFLARE_RULE_EXPRESSION_TEMPLATE: ${{ secrets.CLOUDFLARE_RULE_EXPRESSION_TEMPLATE }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python sync_monitors.py aggregate --results-dir collected-results

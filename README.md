@@ -1,6 +1,6 @@
 # UptimeRobot 监控同步
 
-这个仓库用于把服务器公网 IP 同步到 UptimeRobot 监控，并在同步完成后通过 Telegram 发送 ARM64 服务器 IP 清单。
+这个仓库用于把服务器公网 IP 同步到 UptimeRobot 监控。
 
 同时，它还会把采集到的 ARM64 服务器 `IPv4` / `IPv6` 更新到 Cloudflare 安全规则中，用于维护目标服务的允许访问 IP 白名单。
 
@@ -14,8 +14,6 @@
 - 自动绑定每个 UptimeRobot 账号的第一个告警联系人
 - 采集 ARM64 服务器公网 `IPv4` 和 `IPv6`
 - 采集 AMD64 服务器公网 `IPv4` 和 `IPv6`
-- 发送 Telegram 消息 `ARM64 服务器 IP 清单`
-- 发送 Telegram 消息 `AMD64 服务器 IP 清单`
 - 仅将 ARM64 服务器 IP 更新到 Cloudflare 规则 `Allow Only Server IP List to batam2-ai`
 
 ## 仓库结构
@@ -35,7 +33,6 @@
 6. 使用采集到的 `IPv4` 同步 UptimeRobot 监控目标。
 7. 基于 ARM64 服务器采集结果构建 `IPv4` / `IPv6` 白名单。
 8. 更新 Cloudflare 安全规则表达式。
-9. 发送 ARM64 IP 汇总到 Telegram。
 
 ## 所需 Secrets
 
@@ -76,8 +73,7 @@
 
 ### Telegram
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+- 已停用：`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 不再需要（`send_telegram_ip_report` 目前未被调用）
 
 ### Cloudflare
 
@@ -128,7 +124,7 @@ python3 sync_monitors.py
 2. `collect`
    每个 `matrix` 任务只负责一台服务器的 SSH 登录与 IP 采集，并通过 `max-parallel: 1` 保证按顺序执行，不会同时批量开始
 3. `aggregate`
-   统一下载所有采集结果，再更新 UptimeRobot、Cloudflare 和 Telegram
+   统一下载所有采集结果，再更新 UptimeRobot 和 Cloudflare
 
 这意味着：
 
@@ -139,7 +135,6 @@ python3 sync_monitors.py
 ## 当前行为
 
 - UptimeRobot 监控仍然会同时同步 `arm64` 和 `amd64`
-- Telegram 报告同时发送 `arm64` 和 `amd64` IP 清单
 - Cloudflare 白名单仅更新 `arm64`
 - UptimeRobot 监控 URL 仍然只使用 `IPv4`
 - GitHub Actions 会按顺序逐台采集服务器 IP，不会并发批量 SSH 登录
