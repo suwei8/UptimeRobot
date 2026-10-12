@@ -148,6 +148,7 @@ python3 sync_monitors.py
 - UptimeRobot 监控仍然会同时同步 `arm64` 和 `amd64`
 - Cloudflare 白名单仅更新 `arm64`
 - 主机 IP 清单写入私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`，不再通过 artifacts 或 Telegram 传播
+- `transport` 为 `direct` 的主机会被跳过：不参与 IP 采集和监控更新，已有监控保留不动
 - UptimeRobot 监控 URL 仍然只使用 `IPv4`
 - GitHub Actions 会按顺序逐台采集服务器 IP，不会并发批量 SSH 登录
 

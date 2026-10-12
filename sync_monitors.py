@@ -942,6 +942,10 @@ def synchronize_with_results(servers, collected_results):
         if not name or not ssh_host:
             continue
 
+        if server.get('transport') == 'direct':
+            print(f"Skipping {name}: transport=direct")
+            continue
+
         api_key = API_KEYS.get(cpu_type)
         if not api_key:
             print(f"Skipping {name}: Unknown cpu_type {cpu_type}")
@@ -1070,6 +1074,9 @@ def run_full_sync():
             continue
 
         cpu_type = server.get("cpu_type", "amd64")
+        if server.get("transport") == "direct":
+            print(f"\n--- Skipping {name}: transport=direct ---")
+            continue
         print(f"\n--- Collecting {name} ({cpu_type}) ---")
         try:
             collected_results[name] = collect_server_result(server)
