@@ -444,6 +444,53 @@ def save_json(path, payload):
         json.dump(payload, output_file, ensure_ascii=False, indent=2)
         output_file.write("\n")
 
+def write_hosts_ip_file(servers, collected_results, output_path):
+    cst = timezone(timedelta(hours=8))
+    now_str = datetime.now(cst).strftime("%Y-%m-%d %H:%M CST")
+
+    ordered_results = []
+    seen_names = set()
+    for server in servers:
+        name = server.get("name")
+        if name and name in collected_results and name not in seen_names:
+            ordered_results.append(collected_results[name])
+            seen_names.add(name)
+    for name in sorted(collected_results):
+        if name not in seen_names:
+            ordered_results.append(collected_results[name])
+
+    lines = [
+        "HOSTS IP 清单",
+        f"Updated: {now_str}",
+        "=" * 50,
+        "",
+    ]
+    ipv4_count = 0
+    ipv6_count = 0
+    failed_count = 0
+    for result in ordered_results:
+        ipv4 = result.get("ipv4")
+        ipv6 = result.get("ipv6")
+        if ipv4:
+            ipv4_count += 1
+        if ipv6:
+            ipv6_count += 1
+        if not ipv4 and not ipv6:
+            failed_count += 1
+        lines.append(f"{result.get('name')} ({result.get('cpu_type', 'amd64')})")
+        lines.append(f"  IPv4: {ipv4 or 'N/A'}")
+        lines.append(f"  IPv6: {ipv6 or 'N/A'}")
+        lines.append("")
+
+    lines.append("=" * 50)
+    lines.append(
+        f"Total {len(ordered_results)} | IPv4 {ipv4_count} | IPv6 {ipv6_count} | Failed {failed_count}"
+    )
+
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        output_file.write("\n".join(lines) + "\n")
+    print(f"Wrote hosts IP file to {output_path}")
+
 def load_collected_results(results_dir):
     result_map = {}
     for path in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
@@ -783,6 +830,10 @@ def update_cloudflare_server_ip_rule(collected_ips):
         print("Cloudflare rule sync not configured. Skipping security rule update.")
         return
 
+    if not collected_ips:
+        print("No collected server IPs available. Skipping Cloudflare rule update to avoid wiping the allowlist.")
+        return
+
     scope_type, scope_id = get_cloudflare_scope()
     extra_allowlist = load_cloudflare_extra_allowlist()
     if extra_allowlist:
@@ -1057,6 +1108,8 @@ def run_aggregate_mode(args):
 
     collected_results = load_collected_results(args.results_dir)
     print(f"Loaded {len(collected_results)} collected server result(s) from {args.results_dir}.")
+    if args.ip_output:
+        write_hosts_ip_file(servers, collected_results, args.ip_output)
     synchronize_with_results(servers, collected_results)
 
 def run_manual_cloudflare_mode(args):
@@ -1078,6 +1131,7 @@ def build_arg_parser():
 
     aggregate_parser = subparsers.add_parser("aggregate", help="Aggregate collected results and update services.")
     aggregate_parser.add_argument("--results-dir", required=True, help="Directory containing collected JSON result files.")
+    aggregate_parser.add_argument("--ip-output", help="Optional path to write the full hosts IP list as a text file.")
 
     manual_cf_parser = subparsers.add_parser(
         "manual-cloudflare",

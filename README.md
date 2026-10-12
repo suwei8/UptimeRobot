@@ -1,6 +1,6 @@
 # UptimeRobot 监控同步
 
-这个仓库用于把服务器公网 IP 同步到 UptimeRobot 监控。
+这个仓库用于把服务器公网 IP 同步到 UptimeRobot 监控，并把全部主机的 IP 清单写入私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`。
 
 同时，它还会把采集到的 ARM64 服务器 `IPv4` / `IPv6` 更新到 Cloudflare 安全规则中，用于维护目标服务的允许访问 IP 白名单。
 
@@ -15,6 +15,7 @@
 - 采集 ARM64 服务器公网 `IPv4` 和 `IPv6`
 - 采集 AMD64 服务器公网 `IPv4` 和 `IPv6`
 - 仅将 ARM64 服务器 IP 更新到 Cloudflare 规则 `Allow Only Server IP List to batam2-ai`
+- 将全部主机 IP 清单提交到私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`
 
 ## 仓库结构
 
@@ -28,11 +29,12 @@
 1. 从远端 JSON 配置加载服务器列表。
 2. GitHub Actions 先生成服务器矩阵。
 3. 通过 `matrix` job 逐台处理服务器，并设置 `max-parallel: 1`，保证同一时间只采集一台。
-4. 每个采集 job 通过 Cloudflare Access SSH 登录对应 `ssh_host`，获取公网 `IPv4` 和 `IPv6`，并保存为单独结果文件。
-5. 最后的汇总 job 读取全部采集结果。
+4. 每个采集 job 通过 Cloudflare Access SSH 登录对应 `ssh_host`，获取公网 `IPv4` 和 `IPv6`，并将结果 JSON 推送到私有仓库 `suwei8/blog` 的 `ip-collect` 分支（不上传 GitHub artifacts，避免在公开仓库暴露 IP）。
+5. 最后的汇总 job 从 `ip-collect` 分支取回全部采集结果。
 6. 使用采集到的 `IPv4` 同步 UptimeRobot 监控目标。
 7. 基于 ARM64 服务器采集结果构建 `IPv4` / `IPv6` 白名单。
 8. 更新 Cloudflare 安全规则表达式。
+9. 生成 `HOSTS_IP.txt` 提交到 `suwei8/blog` 默认分支，并删除 `ip-collect` 临时分支。
 
 ## 所需 Secrets
 
@@ -70,6 +72,15 @@
 - `SSH_PASSWORD`
 
 脚本通过 `cloudflared access ssh --hostname ...` 配合 `sshpass` 访问服务器。
+
+### Blog 仓库
+
+- `BLOG_REPO_PAT`
+
+用于向私有仓库 `suwei8/blog` 推送采集结果（`ip-collect` 分支）和 `HOSTS_IP.txt`。
+GitHub 内置的 `GITHUB_TOKEN` 只能写本仓库，跨仓库推送必须提供 PAT；
+建议创建 Fine-grained PAT，仅授权 `suwei8/blog` 的 `Contents: Read and write` 权限。
+注意 secret 不能以 `GITHUB_` 前缀命名（GitHub 保留），因此不能使用 `GITHUB_TOKEN` 这个名字。
 
 ### Telegram
 
@@ -122,9 +133,9 @@ python3 sync_monitors.py
 1. `prepare`
    从 `HOSTS_CONFIG_URL` 拉取服务器清单并生成 `matrix`
 2. `collect`
-   每个 `matrix` 任务只负责一台服务器的 SSH 登录与 IP 采集，并通过 `max-parallel: 1` 保证按顺序执行，不会同时批量开始
+   每个 `matrix` 任务只负责一台服务器的 SSH 登录与 IP 采集，并通过 `max-parallel: 1` 保证按顺序执行，不会同时批量开始；结果 JSON 逐个推送到 `suwei8/blog` 的 `ip-collect` 分支
 3. `aggregate`
-   统一下载所有采集结果，再更新 UptimeRobot 和 Cloudflare
+   从 `ip-collect` 分支取回全部采集结果，更新 UptimeRobot 和 Cloudflare，并把 `HOSTS_IP.txt` 提交到 `suwei8/blog` 默认分支
 
 这意味着：
 
@@ -136,6 +147,7 @@ python3 sync_monitors.py
 
 - UptimeRobot 监控仍然会同时同步 `arm64` 和 `amd64`
 - Cloudflare 白名单仅更新 `arm64`
+- 主机 IP 清单写入私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`，不再通过 artifacts 或 Telegram 传播
 - UptimeRobot 监控 URL 仍然只使用 `IPv4`
 - GitHub Actions 会按顺序逐台采集服务器 IP，不会并发批量 SSH 登录
 

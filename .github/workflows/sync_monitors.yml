@@ -69,8 +69,7 @@ jobs:
                   "name": name,
                   "cpu_type": cpu_type,
                   "ssh_host": ssh_host,
-                  "result_file": f"{index:03d}-{slug}.json",
-                  "artifact_name": f"collected-{index:03d}-{slug}"
+                  "result_file": f"{index:03d}-{slug}.json"
               })
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
@@ -127,13 +126,29 @@ jobs:
             python -c 'import json, os; path = os.environ["RESULT_PATH"]; os.makedirs(os.path.dirname(path), exist_ok=True); payload = {"name": os.environ["SERVER_NAME"], "cpu_type": os.environ["SERVER_CPU_TYPE"], "ssh_host": os.environ["SERVER_SSH_HOST"], "ipv4": None, "ipv6": None, "status": "failed"}; open(path, "w", encoding="utf-8").write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")'
           fi
 
-      - name: Upload collected result
+      - name: Push collected result to blog repo
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: collected/${{ matrix.result_file }}
-          if-no-files-found: error
+        env:
+          BLOG_REPO_PAT: ${{ secrets.BLOG_REPO_PAT }}
+          RESULT_FILE: ${{ matrix.result_file }}
+        run: |
+          git clone "https://x-access-token:${BLOG_REPO_PAT}@github.com/suwei8/blog.git" blog-data
+          cd blog-data
+          git config user.name "uptimerobot-sync"
+          git config user.email "uptimerobot-sync@users.noreply.github.com"
+          if git fetch --depth 1 origin ip-collect:ip-collect; then
+            git checkout ip-collect
+          else
+            git checkout -b ip-collect
+          fi
+          mkdir -p collected
+          cp "../collected/${RESULT_FILE}" "collected/${RESULT_FILE}"
+          git add "collected/${RESULT_FILE}"
+          git commit -m "collect: ${{ matrix.name }}"
+          if ! git push origin ip-collect; then
+            git pull --rebase origin ip-collect
+            git push origin ip-collect
+          fi
 
   aggregate:
     needs:
@@ -154,12 +169,21 @@ jobs:
         run: |
           pip install requests
 
-      - name: Download collected results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: collected-*
-          path: collected-results
-          merge-multiple: true
+      - name: Download collected results from blog repo
+        env:
+          BLOG_REPO_PAT: ${{ secrets.BLOG_REPO_PAT }}
+        run: |
+          mkdir -p collected-results
+          git clone "https://x-access-token:${BLOG_REPO_PAT}@github.com/suwei8/blog.git" blog-data
+          cd blog-data
+          git config user.name "uptimerobot-sync"
+          git config user.email "uptimerobot-sync@users.noreply.github.com"
+          if git fetch origin ip-collect:ip-collect; then
+            git checkout ip-collect
+            cp collected/*.json ../collected-results/ 2>/dev/null || echo "No collected JSON files on ip-collect branch"
+          else
+            echo "ip-collect branch not found; continuing with empty results"
+          fi
 
       - name: Run aggregate sync
         env:
@@ -179,4 +203,24 @@ jobs:
           CLOUDFLARE_RULE_DESCRIPTION: ${{ secrets.CLOUDFLARE_RULE_DESCRIPTION }}
           CLOUDFLARE_RULE_EXPRESSION_TEMPLATE: ${{ secrets.CLOUDFLARE_RULE_EXPRESSION_TEMPLATE }}
         run: |
-          python sync_monitors.py aggregate --results-dir collected-results
+          python sync_monitors.py aggregate --results-dir collected-results --ip-output HOSTS_IP.txt
+
+      - name: Commit HOSTS_IP.txt to blog repo
+        if: ${{ always() }}
+        run: |
+          cd blog-data
+          DEFAULT_BRANCH=$(git remote show origin | sed -n 's/.*HEAD branch: //p')
+          git checkout "$DEFAULT_BRANCH"
+          if [ -f ../HOSTS_IP.txt ]; then
+            cp ../HOSTS_IP.txt ./HOSTS_IP.txt
+            git add HOSTS_IP.txt
+            if git diff --cached --quiet; then
+              echo "HOSTS_IP.txt unchanged"
+            else
+              git commit -m "Update HOSTS_IP.txt"
+              git push origin "$DEFAULT_BRANCH"
+            fi
+          else
+            echo "HOSTS_IP.txt was not generated; skipping commit"
+          fi
+          git push origin --delete ip-collect || true
