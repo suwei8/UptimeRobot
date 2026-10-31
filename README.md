@@ -25,6 +25,7 @@
 - [`.github/workflows/sync_monitors.yml`](/home/sw/dev_root/UptimeRobot/.github/workflows/sync_monitors.yml)：GitHub Actions 工作流
 - [`bin/cloudflared-linux-amd64`](/home/sw/dev_root/UptimeRobot/bin/cloudflared-linux-amd64)：通过 Cloudflare Access 进行 SSH 代理时使用的二进制文件
 - [`cloudflare_extra_allowlist.txt`](/home/sw/dev_root/UptimeRobot/cloudflare_extra_allowlist.txt)：需要长期保留在 Cloudflare 规则中的额外 IP / CIDR 白名单
+- [`bin/delete_deprecated_secrets.sh`](/home/sw/dev_root/UptimeRobot/bin/delete_deprecated_secrets.sh)：批量删除下面「可以删除的 Secrets」中列出的已废弃 Repository Secrets（默认 dry-run）
 
 ## 运行流程
 
@@ -65,6 +66,9 @@
 
 ### 可以删除的 Secrets
 
+> ✅ 已于 2026-10-31 全部清理完毕（用 `bin/delete_deprecated_secrets.sh --apply` 删除）。
+> 下表保留作为记录；若日后再次出现同名 Secret，可重复运行脚本（幂等）。
+
 下面这些名字已经不再被代码或工作流读取，可以直接删除：
 
 | Secret 名称 | 删除原因 |
@@ -76,6 +80,27 @@
 | `TELEGRAM_BOT_TOKEN` | Telegram IP 推送已停用（`send_telegram_ip_report` 未被调用） |
 | `TELEGRAM_CHAT_ID` | 同上 |
 | `UPTIMEROBOT_MAIN_API_KEY` | 历史名称，已拆分为 `CF_555606_XYZ_MAIN_API_KEY` / `XINJIAPO_555606_XYZ_MAIN_API_KEY` |
+
+删除方式（网页：**Settings → Secrets and variables → Actions → Repository secrets** 逐个删除）：
+
+```bash
+# 1. 先预演，确认待删除名单（默认就是 dry-run）
+bin/delete_deprecated_secrets.sh
+
+# 2. 确认无误后真正删除
+export GH_TOKEN=<拥有 Secrets: Read and write 权限的 PAT>
+bin/delete_deprecated_secrets.sh --apply
+```
+
+脚本只删除上表列出的名字（幂等，重复运行不会报错），且需要 Token 具备
+**Fine-grained PAT → Repository permissions → Secrets: Read and write**（或 Classic PAT 的 `repo` scope）权限；
+只有仓库 Admin 权限但没有 Secrets 权限的 Token 会返回 `HTTP 403`。
+
+本次执行结果（2026-10-31）：删除了 `CF_API_EMAIL`、`CF_API_KEY`、`CF_ACCOUNT_ID`、`CF_ZONE_ID`、
+`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`；`UPTIMEROBOT_MAIN_API_KEY` 此前已不存在。
+仓库剩余 9 个 Secret 均为在用项：`HOSTS_CONFIG_URL`、`EXTRA_HOSTS_CONFIG_URL`、
+`CF_555606_XYZ_MAIN_API_KEY`、`XINJIAPO_555606_XYZ_MAIN_API_KEY`、`SSH_USERNAME`、
+`AMD64_SSH_USERNAME`、`SSH_PASSWORD`、`BLOG_REPO_PAT`、`CLOUDFLARE_API_TOKEN`。
 
 ### UptimeRobot
 
