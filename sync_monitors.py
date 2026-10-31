@@ -313,14 +313,34 @@ def get_headers(api_key):
     }
 
 def get_server_list():
-    try:
-        print(f"Fetching config from {CONFIG_URL}...")
-        resp = requests.get(CONFIG_URL, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print(f"Failed to fetch config: {e}")
-        return []
+    servers = []
+    seen = set()
+    for url in (CONFIG_URL, EXTRA_CONFIG_URL):
+        if not url:
+            continue
+        try:
+            print(f"Fetching config from {url}...")
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list):
+                print(f"Unexpected config format from {url}: expected list")
+                continue
+            for server in data:
+                if not isinstance(server, dict):
+                    continue
+                # Only treat entries that look like server configs (have ssh_host) as servers.
+                if not server.get("ssh_host"):
+                    continue
+                name = server.get("name")
+                if name and name in seen:
+                    continue
+                if name:
+                    seen.add(name)
+                servers.append(server)
+        except Exception as e:
+            print(f"Failed to fetch config from {url}: {e}")
+    return servers
 
 def get_extra_monitors_list():
     if not EXTRA_CONFIG_URL:
@@ -329,7 +349,11 @@ def get_extra_monitors_list():
         print(f"Fetching extra config from {EXTRA_CONFIG_URL}...")
         resp = requests.get(EXTRA_CONFIG_URL, timeout=10)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if not isinstance(data, list):
+            return []
+        # Only items that look like static monitor definitions (have url) are treated as extra monitors.
+        return [item for item in data if isinstance(item, dict) and item.get("url")]
     except Exception as e:
         print(f"Failed to fetch extra config: {e}")
         return []

@@ -38,6 +38,30 @@
 
 ## 所需 Secrets
 
+> 全部 Secret 都在 **Settings → Secrets and variables → Actions → Repository secrets** 中配置，
+> 名称必须与下表完全一致（区分大小写）。带「可选」的 Secret 不配置也能跑通。
+
+| Secret 名称 | 必需 | 用途 |
+| --- | --- | --- |
+| `HOSTS_CONFIG_URL` | ✅ | 主服务器清单 JSON 地址 |
+| `EXTRA_HOSTS_CONFIG_URL` | ✅（补充服务器时） | 额外服务器清单 JSON 地址 |
+| `CF_555606_XYZ_MAIN_API_KEY` | ✅ | UptimeRobot 账号 1（arm64）Main API Key |
+| `XINJIAPO_555606_XYZ_MAIN_API_KEY` | ✅ | UptimeRobot 账号 2（amd64）Main API Key |
+| `SSH_USERNAME` | ✅ | arm64 服务器 SSH 用户名 |
+| `AMD64_SSH_USERNAME` | ✅ | amd64 服务器 SSH 用户名 |
+| `SSH_PASSWORD` | ✅ | 服务器 SSH 密码 |
+| `BLOG_REPO_PAT` | ✅ | 推送 `suwei8/blog` 私有仓库的 PAT |
+| `CLOUDFLARE_API_TOKEN` | ✅ | 更新 Cloudflare 规则 |
+| `CLOUDFLARE_ACCOUNT_ID`（或 `CF_ACCOUNT_ID`） | ✅ | Cloudflare 账号 ID |
+| `CLOUDFLARE_ZONE_ID`（或 `CF_ZONE_ID`） | ✅ | Cloudflare Zone ID |
+| `CLOUDFLARE_RULESET_ID` | ✅ | 目标 Ruleset ID |
+| `CLOUDFLARE_RULE_ID` | 推荐 | 目标规则 ID |
+| `CLOUDFLARE_RULE_DESCRIPTION` | 可选 | 未提供 `CLOUDFLARE_RULE_ID` 时按描述查找规则 |
+| `CLOUDFLARE_RULE_EXPRESSION_TEMPLATE` | 可选 | 规则表达式模板（含 `__IP_SET__`） |
+| `CF_API_EMAIL` + `CF_API_KEY` | 可选 | Cloudflare Global Key 兜底认证 |
+| `CF_555606_XYZ_STATUS_PAGE_ID` / `_URL_KEY` | 可选 | 指定 arm64 状态页 |
+| `XINJIAPO_555606_XYZ_STATUS_PAGE_ID` / `_URL_KEY` | 可选 | 指定 amd64 状态页 |
+
 ### UptimeRobot
 
 - `CF_555606_XYZ_MAIN_API_KEY`
@@ -64,6 +88,35 @@
   }
 ]
 ```
+
+`EXTRA_HOSTS_CONFIG_URL` 用于补充额外的服务器，返回格式与 `HOSTS_CONFIG_URL` 相同，也是一个 JSON 数组：
+
+```json
+[
+  {
+    "name": "SG1-XXX",
+    "cpu_type": "arm64",
+    "ssh_host": "xxx-ssh.555606.xyz",
+    "proxy_domains": "",
+    "vless_host": "",
+    "keepalive": false
+  },
+  {
+    "name": "SG1-YYY",
+    "cpu_type": "amd64",
+    "ssh_host": "yyy-ssh.555606.xyz",
+    "proxy_domains": "",
+    "vless_host": ""
+  }
+]
+```
+
+说明：
+
+- 两个地址返回的数组会被合并；`name` 重复的条目只保留第一个（`HOSTS_CONFIG_URL` 优先）。
+- 只有同时包含 `name` 和 `ssh_host` 的条目才会被当作服务器；其余字段（`proxy_domains`、`vless_host`、`keepalive` 等）会被忽略。
+- 因为 `EXTRA_HOSTS_CONFIG_URL` 现在是「服务器列表」，不再用于「额外的静态监控定义」，所以以前那种带 `url` 字段的静态监控条目会由 `get_extra_monitors_list()` 单独识别（带 `url` 的条目才当作静态监控）。
+- ⚠️ 必须是**合法 JSON**：最后一个对象后面不能有多余逗号，否则 `response.json()` 会抛异常。建议用 `python3 -m json.tool <file>` 校验。
 
 ### SSH
 
@@ -126,7 +179,13 @@ python3 sync_monitors.py
 
 ## GitHub Actions
 
-工作流定义在 [`.github/workflows/sync_monitors.yml`](/home/sw/dev_root/UptimeRobot/.github/workflows/sync_monitors.yml) 中，当前配置为每 8 小时运行一次，也支持手动触发。
+工作流定义在 [`.github/workflows/sync_monitors.yml`](/home/sw/dev_root/UptimeRobot/.github/workflows/sync_monitors.yml) 中，当前配置为每天 02:00 UTC（北京时间 10:00）运行一次，也支持手动触发。
+
+运行环境说明：
+
+- 使用 `ubuntu-latest`（2026-10-19 起为 Ubuntu 26.04）
+- 使用 `actions/checkout@v5` 与 `actions/setup-python@v5`
+- Python 版本固定为 `3.12`（Ubuntu 26.04 上不再提供 3.9）
 
 当前工作流分为 3 个阶段：
 
@@ -159,3 +218,42 @@ python3 sync_monitors.py
 ```bash
 python3 -m py_compile sync_monitors.py
 ```
+
+校验工作流 YAML：
+
+```bash
+python3 -c "import yaml; [yaml.safe_load(open(f)) for f in ['.github/workflows/sync_monitors.yml', '.github/workflows/manual_cloudflare_update.yml']]; print('YAML OK')"
+```
+
+校验远端服务器配置 JSON 是否合法（把 URL 换成实际地址）：
+
+```bash
+curl -fsSL "$EXTRA_HOSTS_CONFIG_URL" | python3 -m json.tool > /dev/null && echo "JSON OK"
+```
+
+## 常见故障排查
+
+### `prepare` 秒失败：`The version '3.9' ... was not found for Ubuntu 26.04`
+
+原因：`ubuntu-latest` 已迁移到 Ubuntu 26.04，而该镜像不再提供 Python 3.9。
+
+处理：工作流中所有 `python-version` 必须为 `3.12`，并且 `actions/setup-python` 至少为 `v5`。仓库当前已按此配置。
+
+### 采集列表里缺少 `EXTRA_HOSTS_CONFIG_URL` 的服务器
+
+原因：`prepare` job 里构建 matrix 的步骤没有把 `EXTRA_HOSTS_CONFIG_URL` 注入环境变量，Python 里读到的是空值。
+
+处理：确认 `Build server matrix` 步骤的 `env:` 中同时包含 `HOSTS_CONFIG_URL` 和 `EXTRA_HOSTS_CONFIG_URL`。
+
+### `Failed to fetch extra config: Expecting property name enclosed in double quotes`
+
+原因：远端 JSON 不合法（常见于数组最后一个对象后多了逗号）。
+
+处理：用 `python3 -m json.tool` 校验并修正远端文件。
+
+### Secret 更新后仍失败
+
+- GitHub 不会回显 Secret 的值，只有 `***`；如果怀疑值有误，直接覆盖重新保存即可。
+- Secret 名称区分大小写，必须与工作流中的 `${{ secrets.XXX }}` 完全一致。
+- Secret 值不要包含首尾空格或换行（复制粘贴时容易带入）。
+- 修改 Secret 后需要重新触发工作流（`workflow_dispatch` 或等待下一次 schedule），不会自动重跑。
