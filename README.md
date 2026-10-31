@@ -209,6 +209,7 @@ bin/set_access_secrets.sh                       # 预演：只校验取值与权
 bin/set_access_secrets.sh --apply               # 真正写入
 bin/set_access_secrets.sh --token <PAT>         # 覆盖 Token
 bin/set_access_secrets.sh --env-file <path>     # 覆盖取值来源文件
+bin/set_access_secrets.sh --secret SSH_PASSWORD # 追加写入其它 Secret（可重复）
 ```
 
 脚本要求 Token 具备 **Fine-grained PAT → Repository permissions → Secrets: Read and write**（或 Classic PAT 的 `repo` scope），
@@ -218,7 +219,8 @@ bin/set_access_secrets.sh --env-file <path>     # 覆盖取值来源文件
 python3 -m pip install pynacl
 ```
 
-> 该脚本只写这 4 个名字，重复运行不会报错（已存在则更新）。
+> 该脚本默认只写这 4 个名字，重复运行不会报错（已存在则更新）；
+> 凭据轮换后需要更新别的 Secret（如 `SSH_PASSWORD`）时，用 `--secret <NAME>` 追加，取值同样来自环境变量或 `.env`。
 
 本次执行结果（2026-10-31）：4 个 Secret 全部写入成功，仓库 Secret 总数由 9 个变为 13 个。
 
@@ -424,4 +426,30 @@ bin/check_access_tokens.sh <555606.xyz 的 ssh_host> <hhwpxh.com 的 ssh_host>
 - 除了 Token 本身，还要确认两个区域的 Access 应用策略里允许该 Service Token（Policy → Action `Service Auth` / `Allow`）。
 - 排查时优先看 job 日志里的 `Using Cloudflare Access service token 0163****cess for ***-ssh.555606.xyz` 之类的输出，
   它说明脚本选中了哪个区域的 Token（Token ID 在日志中始终是打码的）。
+
+### Access 已通过、但 SSH 认证失败：`Permission denied, please try again.`
+
+`collect` job 日志里先出现 `Using Cloudflare Access service token ...`（说明隧道已打通、Access 已放行），
+紧接着是 `Permission denied, please try again.`——这说明 **Access 这一层没问题，是 SSH 用户名/密码被服务器拒绝**。
+
+排查与处理：
+
+1. 先用 `bin/check_access_tokens.sh <ssh_host>` 复验隧道：只要能看到 `Permission denied (publickey,password)`，就说明 Access 正常。
+2. 在服务器上确认当前的 SSH 用户名/密码，然后更新对应 Secret：
+
+```bash
+# 先把新值写进仓库根目录的 .env（该文件已被 .gitignore 忽略，不会被提交）
+# SSH_USERNAME=<arm64 用户名>
+# AMD64_SSH_USERNAME=<amd64 用户名>
+# SSH_PASSWORD=<新密码>
+bin/set_access_secrets.sh --apply --secret SSH_USERNAME --secret AMD64_SSH_USERNAME --secret SSH_PASSWORD
+```
+
+3. 改完后重新触发工作流（`workflow_dispatch` 或等下一次 schedule）。
+
+> ⚠️ `SSH_USERNAME` / `AMD64_SSH_USERNAME` / `SSH_PASSWORD` 这三个 Secret 最后更新于 2026-01-12。
+> 如果服务器侧改过密码（例如密钥泄露后的凭据轮换），CI 会一直认证失败，
+> 但 collect job 状态**仍然显示 success**（脚本把失败写进结果 JSON 的 `status` 字段，不会让 job 失败）。
+> 判断采集是否真的成功，要看 `Collected <主机名> (cpu): IPv4=...` 里是不是真实 IP，而不是 `N/A`。
+
 

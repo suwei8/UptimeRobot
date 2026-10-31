@@ -11,6 +11,10 @@
 #   bin/set_access_secrets.sh --repo owner/name
 #   bin/set_access_secrets.sh --token <PAT>
 #   bin/set_access_secrets.sh --env-file <path>
+#   bin/set_access_secrets.sh --secret SSH_PASSWORD   # 追加写入其它 Secret（可重复）
+#
+# 默认只写下面列出的 4 个 Access Service Token；--secret 可追加任意 Secret 名称
+# （例如凭据轮换后需要更新的 SSH_PASSWORD / SSH_USERNAME / AMD64_SSH_USERNAME）。
 #
 # Token 需要具备管理仓库 Secret 的权限（以下二选一）：
 #   * Fine-grained PAT：Repository permissions → Secrets: Read and write
@@ -38,8 +42,11 @@ SECRET_NAMES=(
   CF_ACCESS_SECRET_555606
 )
 
+# 通过 --secret 追加的额外 Secret 名称
+EXTRA_SECRET_NAMES=()
+
 usage() {
-  sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -49,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --repo)     REPO="${2:?--repo 需要 owner/name 参数}"; shift 2 ;;
     --token)    TOKEN="${2:?--token 需要一个参数}"; shift 2 ;;
     --env-file) ENV_FILE="${2:?--env-file 需要一个参数}"; shift 2 ;;
+    --secret)   EXTRA_SECRET_NAMES+=("${2:?--secret 需要一个 Secret 名称}"); shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 64 ;;
   esac
@@ -78,6 +86,10 @@ if ! python3 -c 'import nacl.public' >/dev/null 2>&1; then
   python3 -m pip install pynacl
 EOF
   exit 2
+fi
+
+if (( ${#EXTRA_SECRET_NAMES[@]} > 0 )); then
+  SECRET_NAMES+=("${EXTRA_SECRET_NAMES[@]}")
 fi
 
 echo "仓库：${REPO}"
