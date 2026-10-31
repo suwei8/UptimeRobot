@@ -53,6 +53,10 @@
 | `SSH_USERNAME` | ✅ | arm64 服务器 SSH 用户名 |
 | `AMD64_SSH_USERNAME` | ✅ | amd64 服务器 SSH 用户名 |
 | `SSH_PASSWORD` | ✅ | 服务器 SSH 密码 |
+| `CF_ACCESS_ID_HHWPXH` | ✅ | `hhwpxh.com` 区域的 Cloudflare Access Service Token ID |
+| `CF_ACCESS_SECRET_HHWPXH` | ✅ | `hhwpxh.com` 区域的 Cloudflare Access Service Token Secret |
+| `CF_ACCESS_ID_555606` | ✅ | `555606.xyz` 区域的 Cloudflare Access Service Token ID |
+| `CF_ACCESS_SECRET_555606` | ✅ | `555606.xyz` 区域的 Cloudflare Access Service Token Secret |
 | `BLOG_REPO_PAT` | ✅ | 推送 `suwei8/blog` 私有仓库的 PAT |
 | `CLOUDFLARE_API_TOKEN` | ✅ | 更新 Cloudflare 规则（API Token，权限见「Cloudflare」小节） |
 | `CLOUDFLARE_ZONE_ID` | ✅ | Cloudflare Zone ID |
@@ -98,9 +102,10 @@ bin/delete_deprecated_secrets.sh --apply
 
 本次执行结果（2026-10-31）：删除了 `CF_API_EMAIL`、`CF_API_KEY`、`CF_ACCOUNT_ID`、`CF_ZONE_ID`、
 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`；`UPTIMEROBOT_MAIN_API_KEY` 此前已不存在。
-仓库剩余 9 个 Secret 均为在用项：`HOSTS_CONFIG_URL`、`EXTRA_HOSTS_CONFIG_URL`、
+仓库剩余 13 个 Secret 均为在用项：`HOSTS_CONFIG_URL`、`EXTRA_HOSTS_CONFIG_URL`、
 `CF_555606_XYZ_MAIN_API_KEY`、`XINJIAPO_555606_XYZ_MAIN_API_KEY`、`SSH_USERNAME`、
-`AMD64_SSH_USERNAME`、`SSH_PASSWORD`、`BLOG_REPO_PAT`、`CLOUDFLARE_API_TOKEN`。
+`AMD64_SSH_USERNAME`、`SSH_PASSWORD`、`CF_ACCESS_ID_HHWPXH`、`CF_ACCESS_SECRET_HHWPXH`、
+`CF_ACCESS_ID_555606`、`CF_ACCESS_SECRET_555606`、`BLOG_REPO_PAT`、`CLOUDFLARE_API_TOKEN`。
 
 ### UptimeRobot
 
@@ -163,8 +168,32 @@ bin/delete_deprecated_secrets.sh --apply
 - `SSH_USERNAME`
 - `AMD64_SSH_USERNAME`
 - `SSH_PASSWORD`
+- `CF_ACCESS_ID_HHWPXH` / `CF_ACCESS_SECRET_HHWPXH`（`hhwpxh.com` 区域的 Access Service Token）
+- `CF_ACCESS_ID_555606` / `CF_ACCESS_SECRET_555606`（`555606.xyz` 区域的 Access Service Token）
 
 脚本通过 `cloudflared access ssh --hostname ...` 配合 `sshpass` 访问服务器。
+
+服务器清单里的 `ssh_host` 分属两个受 Cloudflare Access 保护的区域（`hhwpxh.com` 和 `555606.xyz`），
+未携带 Service Token 的请求会被重定向到 `https://sw8.cloudflareaccess.com/cdn-cgi/access/login/...`（HTTP 302）。
+因此 `sync_monitors.py` 会按 `ssh_host` 的域名后缀选择对应的 Service Token，
+并以 `cloudflared access ssh --service-token-id ... --service-token-secret ...` 的形式传给代理：
+
+| `ssh_host` 后缀 | 使用的 Secret |
+| --- | --- |
+| `*.hhwpxh.com` | `CF_ACCESS_ID_HHWPXH` / `CF_ACCESS_SECRET_HHWPXH` |
+| `*.555606.xyz` | `CF_ACCESS_ID_555606` / `CF_ACCESS_SECRET_555606` |
+
+> ⚠️ Service Token 是**按区域隔离**的：用错区域会被 Access 拒绝（返回 302 登录页）。
+> 所以不要只配置一个 Token，两个区域都要配。
+
+Service Token 创建位置（Cloudflare Dashboard）：
+
+1. **Zero Trust → Access → Service Auth → Service Tokens → Create Service Token**
+2. 每个区域（`hhwpxh.com`、`555606.xyz`）各建一个，Duration 建议 `Non-expiring`
+3. 把生成的 `Client ID`（形如 `xxxx.access`）和 `Client Secret`（形如 `cfast_xxxx`）分别填入上面 4 个 Secret
+4. 确认两个区域的 Access 应用策略里允许该 Service Token（Policy → Action `Service Auth` / `Allow`）
+
+本地运行时，这 4 个变量可直接写在仓库根目录的 `.env` 中（脚本会自动加载）。
 
 ### Blog 仓库
 

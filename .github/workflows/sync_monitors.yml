@@ -134,6 +134,11 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
           AMD64_SSH_USERNAME: ${{ secrets.AMD64_SSH_USERNAME }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          # Cloudflare Access service tokens, one per SSH zone (hhwpxh.com / 555606.xyz).
+          CF_ACCESS_ID_HHWPXH: ${{ secrets.CF_ACCESS_ID_HHWPXH }}
+          CF_ACCESS_SECRET_HHWPXH: ${{ secrets.CF_ACCESS_SECRET_HHWPXH }}
+          CF_ACCESS_ID_555606: ${{ secrets.CF_ACCESS_ID_555606 }}
+          CF_ACCESS_SECRET_555606: ${{ secrets.CF_ACCESS_SECRET_555606 }}
           SERVER_NAME: ${{ matrix.name }}
           SERVER_CPU_TYPE: ${{ matrix.cpu_type }}
           SERVER_SSH_HOST: ${{ matrix.ssh_host }}

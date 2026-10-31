@@ -9,6 +9,7 @@ import ipaddress
 import re
 import glob
 import argparse
+import shlex
 from datetime import datetime, timezone, timedelta
 
 def load_local_env_file(env_path=".env"):
@@ -64,6 +65,20 @@ SSH_USERS = {
     "amd64": get_env("AMD64_SSH_USERNAME")
 }
 SSH_PASS = get_env("SSH_PASSWORD")
+
+# Cloudflare Access service tokens, one per SSH zone.
+# The SSH hosts in the server list live under two Access-protected zones, and each
+# service token is scoped to a single zone, so the token must be chosen per hostname.
+CF_ACCESS_TOKENS = {
+    "hhwpxh.com": (
+        get_env("CF_ACCESS_ID_HHWPXH"),
+        get_env("CF_ACCESS_SECRET_HHWPXH"),
+    ),
+    "555606.xyz": (
+        get_env("CF_ACCESS_ID_555606"),
+        get_env("CF_ACCESS_SECRET_555606"),
+    ),
+}
 
 TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_env("TELEGRAM_CHAT_ID")
@@ -380,6 +395,46 @@ def parse_ip_value(value, version):
         return None
     return str(parsed)
 
+def mask_access_token(token_id):
+    if not token_id:
+        return "N/A"
+    if len(token_id) > 16:
+        return f"{token_id[:8]}****{token_id[-4:]}"
+    return "****"
+
+def scrub_secret(text, secret):
+    """Remove a secret value from text so it never reaches the logs."""
+    if not text:
+        return text
+    if secret:
+        return text.replace(secret, "****")
+    return text
+
+def get_access_service_token(ssh_host):
+    """Return the (id, secret) Cloudflare Access service token for ssh_host.
+
+    The hostname is matched against the zone suffixes in CF_ACCESS_TOKENS; the
+    longest matching suffix wins, so more specific zones can be added later.
+    Returns (None, None) when no token is configured for the hostname.
+    """
+    if not ssh_host:
+        return None, None
+
+    host = ssh_host.strip().lower().rstrip(".")
+    best_suffix = None
+    for suffix in CF_ACCESS_TOKENS:
+        if host == suffix or host.endswith("." + suffix):
+            if best_suffix is None or len(suffix) > len(best_suffix):
+                best_suffix = suffix
+
+    if best_suffix is None:
+        return None, None
+
+    token_id, token_secret = CF_ACCESS_TOKENS[best_suffix]
+    if not token_id or not token_secret:
+        return None, None
+    return token_id, token_secret
+
 def get_public_ips(ssh_host, cpu_type, server_name=None):
     # Special case: these GCP Oregon hosts use the ARM64 SSH username despite being amd64.
     if server_name in {"US-GCP俄勒冈", "US-GCP俄勒冈2"}:
@@ -391,7 +446,24 @@ def get_public_ips(ssh_host, cpu_type, server_name=None):
         return {"ipv4": None, "ipv6": None}
 
     cloudflared_bin = get_cloudflared_binary()
-    proxy_cmd = f"{cloudflared_bin} access ssh --hostname {ssh_host}"
+    access_token_id, access_token_secret = get_access_service_token(ssh_host)
+    proxy_parts = [cloudflared_bin, "access", "ssh", "--hostname", shlex.quote(ssh_host)]
+    if access_token_id and access_token_secret:
+        # Each zone has its own service token, so pass it explicitly per connection.
+        proxy_parts += [
+            "--service-token-id", shlex.quote(access_token_id),
+            "--service-token-secret", shlex.quote(access_token_secret),
+        ]
+        print(
+            f"Using Cloudflare Access service token {mask_access_token(access_token_id)} "
+            f"for {mask_host(ssh_host)}."
+        )
+    else:
+        print(
+            f"No Cloudflare Access service token configured for {mask_host(ssh_host)}; "
+            "cloudflared will fall back to interactive auth."
+        )
+    proxy_cmd = " ".join(proxy_parts)
     remote_cmd = (
         "sh -lc '"
         "ipv4=$(curl -fsS -4 --max-time 10 https://ifconfig.me/ip 2>/dev/null || true); "
@@ -422,10 +494,12 @@ def get_public_ips(ssh_host, cpu_type, server_name=None):
                     ipv6 = parse_ip_value(line.split("=", 1)[1], 6)
 
             if not ipv4 and not ipv6:
-                print(f"Invalid IP output from {mask_host(ssh_host)}: {result.stdout.strip()}")
+                stdout_masked = scrub_secret(result.stdout.strip(), access_token_secret)
+                print(f"Invalid IP output from {mask_host(ssh_host)}: {stdout_masked}")
             return {"ipv4": ipv4, "ipv6": ipv6}
         else:
             stderr_masked = result.stderr.replace(ssh_host, mask_host(ssh_host))
+            stderr_masked = scrub_secret(stderr_masked, access_token_secret)
             print(f"SSH failed for {mask_host(ssh_host)}: {stderr_masked}")
     except subprocess.TimeoutExpired:
         print(f"SSH timed out for {mask_host(ssh_host)}")
