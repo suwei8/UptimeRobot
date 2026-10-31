@@ -26,6 +26,8 @@
 - [`bin/cloudflared-linux-amd64`](/home/sw/dev_root/UptimeRobot/bin/cloudflared-linux-amd64)：通过 Cloudflare Access 进行 SSH 代理时使用的二进制文件
 - [`cloudflare_extra_allowlist.txt`](/home/sw/dev_root/UptimeRobot/cloudflare_extra_allowlist.txt)：需要长期保留在 Cloudflare 规则中的额外 IP / CIDR 白名单
 - [`bin/delete_deprecated_secrets.sh`](/home/sw/dev_root/UptimeRobot/bin/delete_deprecated_secrets.sh)：批量删除下面「可以删除的 Secrets」中列出的已废弃 Repository Secrets（默认 dry-run）
+- [`bin/set_access_secrets.sh`](/home/sw/dev_root/UptimeRobot/bin/set_access_secrets.sh)：写入「SSH」小节所需的 4 个 Cloudflare Access Service Token Secret（默认 dry-run）
+- [`bin/check_access_tokens.sh`](/home/sw/dev_root/UptimeRobot/bin/check_access_tokens.sh)：对指定 `ssh_host` 做 A/B 探测，验证 Access Service Token 是否能通过对应区域的策略
 
 ## 运行流程
 
@@ -102,7 +104,8 @@ bin/delete_deprecated_secrets.sh --apply
 
 本次执行结果（2026-10-31）：删除了 `CF_API_EMAIL`、`CF_API_KEY`、`CF_ACCOUNT_ID`、`CF_ZONE_ID`、
 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`；`UPTIMEROBOT_MAIN_API_KEY` 此前已不存在。
-仓库剩余 13 个 Secret 均为在用项：`HOSTS_CONFIG_URL`、`EXTRA_HOSTS_CONFIG_URL`、
+随后又用 `bin/set_access_secrets.sh --apply` 补齐了 4 个 Access Service Token Secret（详见「SSH」小节），
+仓库 Secret 总数由 9 个变为 13 个，全部为在用项：`HOSTS_CONFIG_URL`、`EXTRA_HOSTS_CONFIG_URL`、
 `CF_555606_XYZ_MAIN_API_KEY`、`XINJIAPO_555606_XYZ_MAIN_API_KEY`、`SSH_USERNAME`、
 `AMD64_SSH_USERNAME`、`SSH_PASSWORD`、`CF_ACCESS_ID_HHWPXH`、`CF_ACCESS_SECRET_HHWPXH`、
 `CF_ACCESS_ID_555606`、`CF_ACCESS_SECRET_555606`、`BLOG_REPO_PAT`、`CLOUDFLARE_API_TOKEN`。
@@ -194,6 +197,41 @@ Service Token 创建位置（Cloudflare Dashboard）：
 4. 确认两个区域的 Access 应用策略里允许该 Service Token（Policy → Action `Service Auth` / `Allow`）
 
 本地运行时，这 4 个变量可直接写在仓库根目录的 `.env` 中（脚本会自动加载）。
+
+#### 写入这 4 个 Secret
+
+工作流读取的是 `secrets.CF_ACCESS_ID_HHWPXH` 等 4 个名字。**如果它们没有配置，`cloudflared` 会退化为交互式认证，
+采集任务就会因为 Access 登录页（HTTP 302）而失败。** 用 `bin/set_access_secrets.sh` 可以幂等地写入：
+
+```bash
+# 取值来源：环境变量 > .env（默认仓库根目录）
+bin/set_access_secrets.sh                       # 预演：只校验取值与权限
+bin/set_access_secrets.sh --apply               # 真正写入
+bin/set_access_secrets.sh --token <PAT>         # 覆盖 Token
+bin/set_access_secrets.sh --env-file <path>     # 覆盖取值来源文件
+```
+
+脚本要求 Token 具备 **Fine-grained PAT → Repository permissions → Secrets: Read and write**（或 Classic PAT 的 `repo` scope），
+并使用 python3 的 `pynacl` 生成 GitHub 要求的 libsodium sealed box 密文：
+
+```bash
+python3 -m pip install pynacl
+```
+
+> 该脚本只写这 4 个名字，重复运行不会报错（已存在则更新）。
+
+本次执行结果（2026-10-31）：4 个 Secret 全部写入成功，仓库 Secret 总数由 9 个变为 13 个。
+
+验证方式：用 `ssh -o BatchMode=yes` 走 `cloudflared access ssh` 做 A/B 对比——不带 Token 会被 Access 拦下，
+带**对应区域**的 Token 才能握手到 SSH 服务（此时报 `Permission denied` 属于预期，因为只测隧道不测密码）：
+
+| 探测 | 结果 |
+| --- | --- |
+| `555606.xyz` 主机 + 不带 Token | `Connection timed out during banner exchange`（被 Access 拦下） |
+| `555606.xyz` 主机 + `CF_ACCESS_ID_555606` | `Permission denied (publickey,password)`（已到达 SSH 服务） |
+| `hhwpxh.com` 主机 + 不带 Token | `Connection timed out during banner exchange`（被 Access 拦下） |
+| `hhwpxh.com` 主机 + `CF_ACCESS_ID_HHWPXH` | `Permission denied (publickey,password)`（已到达 SSH 服务） |
+| `555606.xyz` 主机 + `CF_ACCESS_ID_HHWPXH`（跨区域） | `Connection timed out during banner exchange`（被拦，符合区域隔离） |
 
 ### Blog 仓库
 
@@ -328,6 +366,15 @@ python3 -c "import yaml; [yaml.safe_load(open(f)) for f in ['.github/workflows/s
 curl -fsSL "$EXTRA_HOSTS_CONFIG_URL" | python3 -m json.tool > /dev/null && echo "JSON OK"
 ```
 
+验证两个区域的 Access Service Token 能否通过 Cloudflare Access（A/B 探测，不需要 `sshpass`）：
+
+```bash
+# 参数为服务器清单里的 ssh_host，两个区域各给一个
+bin/check_access_tokens.sh drms556i2a-ssh.555606.xyz yjto7jbw7e-ssh.hhwpxh.com
+```
+
+预期输出：不带 Token 时被拦下，带对应区域的 Token 时报 `Permission denied (publickey,password)`（说明隧道已通）。
+
 ## 常见故障排查
 
 ### `prepare` 秒失败：`The version '3.9' ... was not found for Ubuntu 26.04`
@@ -354,3 +401,27 @@ curl -fsSL "$EXTRA_HOSTS_CONFIG_URL" | python3 -m json.tool > /dev/null && echo 
 - Secret 名称区分大小写，必须与工作流中的 `${{ secrets.XXX }}` 完全一致。
 - Secret 值不要包含首尾空格或换行（复制粘贴时容易带入）。
 - 修改 Secret 后需要重新触发工作流（`workflow_dispatch` 或等待下一次 schedule），不会自动重跑。
+
+### `collect` 阶段 SSH 失败：被重定向到 Access 登录页（HTTP 302）
+
+原因：`secrets.CF_ACCESS_ID_HHWPXH`、`secrets.CF_ACCESS_SECRET_HHWPXH`、
+`secrets.CF_ACCESS_ID_555606`、`secrets.CF_ACCESS_SECRET_555606` 这 4 个 Secret 没有配置，
+工作流把它们注入成空字符串，`cloudflared access ssh` 拿不到 Service Token，就会退化为交互式认证并被 Access 拦下。
+
+处理：
+
+```bash
+# 1. 写入 4 个 Access Service Token Secret
+bin/set_access_secrets.sh --apply
+
+# 2. 复验（不带 Token 会被拦，带对应区域的 Token 能握手到 SSH）
+bin/check_access_tokens.sh <555606.xyz 的 ssh_host> <hhwpxh.com 的 ssh_host>
+```
+
+补充说明：
+
+- Service Token 是**按区域隔离**的，用错区域同样会被拦下（返回 302 登录页）。
+- 除了 Token 本身，还要确认两个区域的 Access 应用策略里允许该 Service Token（Policy → Action `Service Auth` / `Allow`）。
+- 排查时优先看 job 日志里的 `Using Cloudflare Access service token 0163****cess for ***-ssh.555606.xyz` 之类的输出，
+  它说明脚本选中了哪个区域的 Token（Token ID 在日志中始终是打码的）。
+
