@@ -178,6 +178,10 @@ jobs:
       - collect
     if: ${{ always() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      # Name of the IP inventory file written into the private blog repo.
+      # Renamed from the leaked HOSTS_IP.txt; change it here only.
+      IP_LIST_FILE: internal-notes.txt
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -217,10 +221,6 @@ jobs:
           CF_555606_XYZ_STATUS_PAGE_URL_KEY: ${{ secrets.CF_555606_XYZ_STATUS_PAGE_URL_KEY }}
           XINJIAPO_555606_XYZ_STATUS_PAGE_ID: ${{ secrets.XINJIAPO_555606_XYZ_STATUS_PAGE_ID }}
           XINJIAPO_555606_XYZ_STATUS_PAGE_URL_KEY: ${{ secrets.XINJIAPO_555606_XYZ_STATUS_PAGE_URL_KEY }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
@@ -229,24 +229,38 @@ jobs:
           CLOUDFLARE_RULE_DESCRIPTION: ${{ secrets.CLOUDFLARE_RULE_DESCRIPTION }}
           CLOUDFLARE_RULE_EXPRESSION_TEMPLATE: ${{ secrets.CLOUDFLARE_RULE_EXPRESSION_TEMPLATE }}
         run: |
-          python sync_monitors.py aggregate --results-dir collected-results --ip-output HOSTS_IP.txt
+          python sync_monitors.py aggregate --results-dir collected-results --ip-output "$IP_LIST_FILE"
 
-      - name: Commit HOSTS_IP.txt to blog repo
+      - name: Commit IP list to blog repo
         if: ${{ always() }}
         run: |
           cd blog-data
-          DEFAULT_BRANCH=$(git remote show origin | sed -n 's/.*HEAD branch: //p')
+          DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            # Fallback for clones without refs/remotes/origin/HEAD; force the C locale so
+            # the "HEAD branch:" marker is not translated.
+            DEFAULT_BRANCH=$(LC_ALL=C git remote show origin | sed -n 's/.*HEAD branch: //p')
+          fi
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            echo "Unable to determine the blog repo default branch" >&2
+            exit 1
+          fi
           git checkout "$DEFAULT_BRANCH"
-          if [ -f ../HOSTS_IP.txt ]; then
-            cp ../HOSTS_IP.txt ./HOSTS_IP.txt
-            git add HOSTS_IP.txt
-            if git diff --cached --quiet; then
-              echo "HOSTS_IP.txt unchanged"
-            else
-              git commit -m "Update HOSTS_IP.txt"
-              git push origin "$DEFAULT_BRANCH"
-            fi
+          # The previous file name leaked; drop it from the blog repo if it is still tracked.
+          if git ls-files --error-unmatch HOSTS_IP.txt >/dev/null 2>&1; then
+            git rm -q HOSTS_IP.txt
+            echo "Removed leaked HOSTS_IP.txt from $DEFAULT_BRANCH"
+          fi
+          if [ -f "../$IP_LIST_FILE" ]; then
+            cp "../$IP_LIST_FILE" "./$IP_LIST_FILE"
+            git add "$IP_LIST_FILE"
           else
-            echo "HOSTS_IP.txt was not generated; skipping commit"
+            echo "$IP_LIST_FILE was not generated; skipping content update"
+          fi
+          if git diff --cached --quiet; then
+            echo "No IP list changes to commit"
+          else
+            git commit -m "Update $IP_LIST_FILE"
+            git push origin "$DEFAULT_BRANCH"
           fi
           git push origin --delete ip-collect || true

@@ -68,11 +68,13 @@ SSH_PASS = get_env("SSH_PASSWORD")
 TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_env("TELEGRAM_CHAT_ID")
 
+# Cloudflare authentication uses an API token only.
+# The legacy Global API Key (CF_API_EMAIL + CF_API_KEY) and the CF_ACCOUNT_ID / CF_ZONE_ID
+# aliases are no longer supported.
 CLOUDFLARE_API_TOKEN = get_env("CLOUDFLARE_API_TOKEN")
-CLOUDFLARE_ACCOUNT_ID = get_env("CLOUDFLARE_ACCOUNT_ID") or get_env("CF_ACCOUNT_ID")
-CLOUDFLARE_ZONE_ID = get_env("CLOUDFLARE_ZONE_ID") or get_env("CF_ZONE_ID")
-CLOUDFLARE_API_EMAIL = get_env("CF_API_EMAIL")
-CLOUDFLARE_API_KEY = get_env("CF_API_KEY")
+CLOUDFLARE_ZONE_ID = get_env("CLOUDFLARE_ZONE_ID")
+# Only needed when the target rule lives at the account level instead of the zone level.
+CLOUDFLARE_ACCOUNT_ID = get_env("CLOUDFLARE_ACCOUNT_ID")
 CLOUDFLARE_RULESET_ID = get_env("CLOUDFLARE_RULESET_ID")
 CLOUDFLARE_RULE_ID = get_env("CLOUDFLARE_RULE_ID")
 CLOUDFLARE_RULE_DESCRIPTION = get_env(
@@ -640,68 +642,49 @@ def get_cloudflare_scope():
 
 def cloudflare_is_configured():
     scope_type, scope_id = get_cloudflare_scope()
-    has_auth = bool(CLOUDFLARE_API_TOKEN or (CLOUDFLARE_API_EMAIL and CLOUDFLARE_API_KEY))
-    return bool(has_auth and scope_type and scope_id)
+    return bool(CLOUDFLARE_API_TOKEN and scope_type and scope_id)
 
-def cloudflare_auth_header_sets():
-    header_sets = []
-    headers = {"Content-Type": "application/json"}
-    if CLOUDFLARE_API_TOKEN:
-        token_headers = dict(headers)
-        token_headers["Authorization"] = f"Bearer {CLOUDFLARE_API_TOKEN}"
-        header_sets.append(("api_token", token_headers))
-    if CLOUDFLARE_API_EMAIL and CLOUDFLARE_API_KEY:
-        key_headers = dict(headers)
-        key_headers["X-Auth-Email"] = CLOUDFLARE_API_EMAIL
-        key_headers["X-Auth-Key"] = CLOUDFLARE_API_KEY
-        header_sets.append(("global_key", key_headers))
-    if not header_sets:
-        raise RuntimeError("Cloudflare credentials are not configured.")
-    return header_sets
+def cloudflare_auth_headers():
+    if not CLOUDFLARE_API_TOKEN:
+        raise RuntimeError(
+            "CLOUDFLARE_API_TOKEN is not configured. Create a Cloudflare API token with "
+            "the 'Zone WAF: Edit' permission for the target zone and store it as the "
+            "CLOUDFLARE_API_TOKEN repository secret."
+        )
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"
+    }
 
 def cloudflare_request(method, path, payload=None):
     url = f"https://api.cloudflare.com/client/v4{path}"
-    auth_attempt_errors = []
-
-    for auth_label, headers in cloudflare_auth_header_sets():
-        response = requests.request(
-            method,
-            url,
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise RuntimeError(f"Cloudflare API returned non-JSON response: HTTP {response.status_code}") from exc
-
-        if response.ok and data.get("success", False):
-            if auth_label != "api_token":
-                print(f"Cloudflare request {method} {path} succeeded using {auth_label} authentication.")
-            return data.get("result")
-
-        errors = data.get("errors", [])
-        auth_attempt_errors.append((auth_label, response.status_code, errors))
-
-        auth_error = response.status_code in (401, 403) and any(err.get("code") == 10000 for err in errors)
-        if auth_error:
-            print(f"Cloudflare {auth_label} authentication failed for {method} {path}. Trying next credential set.")
-            continue
-
-        raise RuntimeError(
-            f"Cloudflare API error on {method} {path}: HTTP {response.status_code} | "
-            f"errors={json.dumps(errors, ensure_ascii=False)}"
-        )
-
-    formatted_errors = "; ".join(
-        f"{label}: HTTP {status} errors={json.dumps(errors, ensure_ascii=False)}"
-        for label, status, errors in auth_attempt_errors
+    response = requests.request(
+        method,
+        url,
+        headers=cloudflare_auth_headers(),
+        json=payload,
+        timeout=30
     )
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"Cloudflare API returned non-JSON response: HTTP {response.status_code}") from exc
+
+    if response.ok and data.get("success", False):
+        return data.get("result")
+
+    errors = data.get("errors", [])
+    permission_hint = ""
+    if response.status_code in (401, 403):
+        permission_hint = (
+            " Check that CLOUDFLARE_API_TOKEN is valid and has the 'Zone WAF: Edit' "
+            "permission for the zone referenced by CLOUDFLARE_ZONE_ID."
+        )
+
     raise RuntimeError(
-        f"Cloudflare API authentication failed for {method} {path} using all configured credential sets. "
-        f"Attempts: {formatted_errors}"
+        f"Cloudflare API error on {method} {path}: HTTP {response.status_code} | "
+        f"errors={json.dumps(errors, ensure_ascii=False)}.{permission_hint}"
     )
 
 def find_cloudflare_target_rule(rules):

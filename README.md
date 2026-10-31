@@ -1,6 +1,8 @@
 # UptimeRobot 监控同步
 
-这个仓库用于把服务器公网 IP 同步到 UptimeRobot 监控，并把全部主机的 IP 清单写入私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`。
+这个仓库用于把服务器公网 IP 同步到 UptimeRobot 监控，并把全部主机的 IP 清单写入私有仓库 `suwei8/blog` 的 `internal-notes.txt`。
+
+> ⚠️ 该清单文件原名为 `HOSTS_IP.txt`，因为文件名已泄露，现已改名。工作流会自动从 `suwei8/blog` 默认分支删除残留的 `HOSTS_IP.txt`。
 
 同时，它还会把采集到的 ARM64 服务器 `IPv4` / `IPv6` 更新到 Cloudflare 安全规则中，用于维护目标服务的允许访问 IP 白名单。
 
@@ -15,7 +17,7 @@
 - 采集 ARM64 服务器公网 `IPv4` 和 `IPv6`
 - 采集 AMD64 服务器公网 `IPv4` 和 `IPv6`
 - 仅将 ARM64 服务器 IP 更新到 Cloudflare 规则 `Allow Only Server IP List to batam2-ai`
-- 将全部主机 IP 清单提交到私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`
+- 将全部主机 IP 清单提交到私有仓库 `suwei8/blog` 的 `internal-notes.txt`
 
 ## 仓库结构
 
@@ -34,7 +36,7 @@
 6. 使用采集到的 `IPv4` 同步 UptimeRobot 监控目标。
 7. 基于 ARM64 服务器采集结果构建 `IPv4` / `IPv6` 白名单。
 8. 更新 Cloudflare 安全规则表达式。
-9. 生成 `HOSTS_IP.txt` 提交到 `suwei8/blog` 默认分支，并删除 `ip-collect` 临时分支。
+9. 生成 `internal-notes.txt` 提交到 `suwei8/blog` 默认分支（同时清理历史泄露文件 `HOSTS_IP.txt`），并删除 `ip-collect` 临时分支。
 
 ## 所需 Secrets
 
@@ -51,16 +53,29 @@
 | `AMD64_SSH_USERNAME` | ✅ | amd64 服务器 SSH 用户名 |
 | `SSH_PASSWORD` | ✅ | 服务器 SSH 密码 |
 | `BLOG_REPO_PAT` | ✅ | 推送 `suwei8/blog` 私有仓库的 PAT |
-| `CLOUDFLARE_API_TOKEN` | ✅ | 更新 Cloudflare 规则 |
-| `CLOUDFLARE_ACCOUNT_ID`（或 `CF_ACCOUNT_ID`） | ✅ | Cloudflare 账号 ID |
-| `CLOUDFLARE_ZONE_ID`（或 `CF_ZONE_ID`） | ✅ | Cloudflare Zone ID |
+| `CLOUDFLARE_API_TOKEN` | ✅ | 更新 Cloudflare 规则（API Token，权限见「Cloudflare」小节） |
+| `CLOUDFLARE_ZONE_ID` | ✅ | Cloudflare Zone ID |
 | `CLOUDFLARE_RULESET_ID` | ✅ | 目标 Ruleset ID |
 | `CLOUDFLARE_RULE_ID` | 推荐 | 目标规则 ID |
 | `CLOUDFLARE_RULE_DESCRIPTION` | 可选 | 未提供 `CLOUDFLARE_RULE_ID` 时按描述查找规则 |
 | `CLOUDFLARE_RULE_EXPRESSION_TEMPLATE` | 可选 | 规则表达式模板（含 `__IP_SET__`） |
-| `CF_API_EMAIL` + `CF_API_KEY` | 可选 | Cloudflare Global Key 兜底认证 |
+| `CLOUDFLARE_ACCOUNT_ID` | 可选 | 仅当目标规则在账号级别（而非 Zone 级别）时才需要 |
 | `CF_555606_XYZ_STATUS_PAGE_ID` / `_URL_KEY` | 可选 | 指定 arm64 状态页 |
 | `XINJIAPO_555606_XYZ_STATUS_PAGE_ID` / `_URL_KEY` | 可选 | 指定 amd64 状态页 |
+
+### 可以删除的 Secrets
+
+下面这些名字已经不再被代码或工作流读取，可以直接删除：
+
+| Secret 名称 | 删除原因 |
+| --- | --- |
+| `CF_API_EMAIL` | Cloudflare Global API Key 认证已废弃，改用 `CLOUDFLARE_API_TOKEN` |
+| `CF_API_KEY` | 同上（Global API Key 本身也建议在 Cloudflare 后台吊销） |
+| `CF_ACCOUNT_ID` | 旧别名，代码已只读取 `CLOUDFLARE_ACCOUNT_ID` |
+| `CF_ZONE_ID` | 旧别名，代码已只读取 `CLOUDFLARE_ZONE_ID` |
+| `TELEGRAM_BOT_TOKEN` | Telegram IP 推送已停用（`send_telegram_ip_report` 未被调用） |
+| `TELEGRAM_CHAT_ID` | 同上 |
+| `UPTIMEROBOT_MAIN_API_KEY` | 历史名称，已拆分为 `CF_555606_XYZ_MAIN_API_KEY` / `XINJIAPO_555606_XYZ_MAIN_API_KEY` |
 
 ### UptimeRobot
 
@@ -130,7 +145,7 @@
 
 - `BLOG_REPO_PAT`
 
-用于向私有仓库 `suwei8/blog` 推送采集结果（`ip-collect` 分支）和 `HOSTS_IP.txt`。
+用于向私有仓库 `suwei8/blog` 推送采集结果（`ip-collect` 分支）和 `internal-notes.txt`。
 GitHub 内置的 `GITHUB_TOKEN` 只能写本仓库，跨仓库推送必须提供 PAT；
 建议创建 Fine-grained PAT，仅授权 `suwei8/blog` 的 `Contents: Read and write` 权限。
 注意 secret 不能以 `GITHUB_` 前缀命名（GitHub 保留），因此不能使用 `GITHUB_TOKEN` 这个名字。
@@ -141,15 +156,43 @@ GitHub 内置的 `GITHUB_TOKEN` 只能写本仓库，跨仓库推送必须提供
 
 ### Cloudflare
 
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ZONE_ID` 或 `CLOUDFLARE_ACCOUNT_ID`
+Cloudflare 只使用 **API Token** 认证；旧版 Global API Key（`CF_API_EMAIL` + `CF_API_KEY`）以及 `CF_ACCOUNT_ID` / `CF_ZONE_ID` 别名已不再支持。
+
+需要配置的 Secret：
+
+- `CLOUDFLARE_API_TOKEN`（必需）
+- `CLOUDFLARE_ZONE_ID`（必需，本仓库规则为 Zone 级别）
 - `CLOUDFLARE_RULESET_ID`
 - `CLOUDFLARE_RULE_ID`（推荐）
 - `CLOUDFLARE_RULE_DESCRIPTION`（可选，默认值为 `Allow Only Server IP List to batam2-ai`）
 - `CLOUDFLARE_RULE_EXPRESSION_TEMPLATE`（可选，作为兜底模板）
+- `CLOUDFLARE_ACCOUNT_ID`（可选，仅当规则在账号级别时才需要）
+
+#### 创建 `CLOUDFLARE_API_TOKEN` 所需的权限
+
+在 Cloudflare 后台 **My Profile → API Tokens → Create Token → Create Custom Token** 中创建，
+脚本实际调用的接口只有以下三个（全部为 Zone 级别）：
+
+| 脚本调用的接口 | 用途 |
+| --- | --- |
+| `GET /zones/{zone_id}/rulesets/phases/http_request_firewall_custom/entrypoint` | 读取 Zone 级 WAF 自定义规则入口 Ruleset |
+| `GET /zones/{zone_id}/rulesets/{ruleset_id}` | 读取指定 Ruleset 及其规则 |
+| `PATCH /zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}` | 更新规则表达式中的 IP 白名单 |
+
+因此 Token 权限按下面这样勾选即可（不要多给）：
+
+| 项目 | 取值 |
+| --- | --- |
+| Permissions | **Zone → WAF → Edit**（API 权限名称为 `Zone WAF: Write`，同时包含读取能力） |
+| Zone Resources | **Include → Specific zone → 目标 Zone**（例如 `555606.xyz`） |
+| Client IP Address Filtering | 不填 |
+| TTL | 不填（长期有效） |
 
 说明：
 
+- 只需要 **Zone WAF: Edit** 这一条权限；不需要 `Account Rulesets`、`Zone: Read`、`DNS: Edit` 等任何其他权限。
+- 如果只做读取验证、不打算写入，可以只给 `Zone WAF: Read`，但工作流最后一步 `PATCH` 更新规则时会失败。
+- 使用 Global API Key 的时代已经结束：代码里不再有任何 Global Key 兜底路径，Token 缺失或权限不足时会直接报错并给出权限提示。
 - 只有 ARM64 服务器的 `IPv4` 和 `IPv6` 会写入 Cloudflare 安全规则。
 - 如果需要长期保留额外的静态来源 IP 或网段，可写入 [`cloudflare_extra_allowlist.txt`](/home/sw/dev_root/UptimeRobot/cloudflare_extra_allowlist.txt)，脚本会在每次更新 Cloudflare 规则时一并合并。
 - 如果没有设置 `CLOUDFLARE_RULE_ID`，脚本会按 `CLOUDFLARE_RULE_DESCRIPTION` 查找目标规则。
@@ -194,7 +237,7 @@ python3 sync_monitors.py
 2. `collect`
    每个 `matrix` 任务只负责一台服务器的 SSH 登录与 IP 采集，并通过 `max-parallel: 1` 保证按顺序执行，不会同时批量开始；结果 JSON 逐个推送到 `suwei8/blog` 的 `ip-collect` 分支
 3. `aggregate`
-   从 `ip-collect` 分支取回全部采集结果，更新 UptimeRobot 和 Cloudflare，并把 `HOSTS_IP.txt` 提交到 `suwei8/blog` 默认分支
+   从 `ip-collect` 分支取回全部采集结果，更新 UptimeRobot 和 Cloudflare，并把 `internal-notes.txt` 提交到 `suwei8/blog` 默认分支
 
 这意味着：
 
@@ -206,7 +249,7 @@ python3 sync_monitors.py
 
 - UptimeRobot 监控仍然会同时同步 `arm64` 和 `amd64`
 - Cloudflare 白名单仅更新 `arm64`
-- 主机 IP 清单写入私有仓库 `suwei8/blog` 的 `HOSTS_IP.txt`，不再通过 artifacts 或 Telegram 传播
+- 主机 IP 清单写入私有仓库 `suwei8/blog` 的 `internal-notes.txt`（原名 `HOSTS_IP.txt` 已因泄露改名），不再通过 artifacts 或 Telegram 传播
 - `transport` 为 `direct` 的主机会被跳过：不参与 IP 采集和监控更新，已有监控保留不动
 - UptimeRobot 监控 URL 仍然只使用 `IPv4`
 - GitHub Actions 会按顺序逐台采集服务器 IP，不会并发批量 SSH 登录
